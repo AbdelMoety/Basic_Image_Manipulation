@@ -24,7 +24,7 @@ const AUTO_GRAY_OPS = new Set([
 export class AppComponent implements OnInit {
   private readonly api = inject(VisionApiService);
 
-  title = 'Computer Vision Workbench';
+  title = 'Computer Vision Work Space';
   operations: CvOperation[] = [];
   groupedOperations: { group: string; items: CvOperation[] }[] = [];
 
