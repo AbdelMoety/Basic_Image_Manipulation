@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CV Image Processor</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 1150px;
+            margin: 30px auto;
+            padding: 0 20px;
+            background: #f8f9fa;
+            color: #212529;
+        }
+        .card {
+            background: #ffffff;
+            padding: 24px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin-bottom: 24px;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        label {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        input[type="file"], input[type="number"], select {
+            padding: 8px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 0.95rem;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        button {
+            background: #0d6efd;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0b5ed7;
+        }
+        .error {
+            background: #f8d7da;
+            color: #842029;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+        .info {
+            background: #cff4fc;
+            color: #055160;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-weight: 500;
+        }
+        .results-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 24px;
+        }
+        .image-box {
+            flex: 1;
+            min-width: 300px;
+            text-align: center;
+        }
+        .image-box img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
+        }
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Computer Vision Workbench</h1>
+
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
+
+    {% if info %}
+        <div class="info">{{ info }}</div>
+    {% endif %}
+
+    <div class="card">
+        <form method="POST" enctype="multipart/form-data">
+            {% csrf_token %}
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="image">Primary Image (Image 1):</label>
+                    <input type="file" id="image" name="image" accept="image/*" required>
+                </div>
+
+                <div class="form-group" id="group-image2">
+                    <label for="image_2">Secondary Image (High-Pass for Hybrid):</label>
+                    <input type="file" id="image_2" name="image_2" accept="image/*">
+                </div>
+
+                <div class="form-group">
+                    <label for="filter_type">Operation:</label>
+                    <select id="filter_type" name="filter_type" onchange="updateFormFields()">
+                        <optgroup label="Color, Histograms & Contrast">
+                            <option value="rgb2gray" {% if selected_operation == 'rgb2gray' %}selected{% endif %}>RGB to Grayscale (Manual)</option>
+                            <option value="plot_histograms" {% if selected_operation == 'plot_histograms' %}selected{% endif %}>Plot Histogram & CDF (Manual)</option>
+                            <option value="equalize" {% if selected_operation == 'equalize' %}selected{% endif %}>Histogram Equalization (Manual)</option>
+                            <option value="normalize" {% if selected_operation == 'normalize' %}selected{% endif %}>Min-Max Normalization (Manual)</option>
+                        </optgroup>
+                        <optgroup label="Thresholding">
+                            <option value="threshold" {% if selected_operation == 'threshold' %}selected{% endif %}>Global Manual Threshold</option>
+                            <option value="iter_threshold" {% if selected_operation == 'iter_threshold' %}selected{% endif %}>Iterative Optimal Threshold</option>
+                            <option value="local_threshold" {% if selected_operation == 'local_threshold' %}selected{% endif %}>Local Adaptive Threshold (Gaussian)</option>
+                        </optgroup>
+                        <optgroup label="Noise & Spatial Smoothing">
+                            <option value="awgn" {% if selected_operation == 'awgn' %}selected{% endif %}>Add White Gaussian Noise (AWGN)</option>
+                            <option value="mean" {% if selected_operation == 'mean' %}selected{% endif %}>Mean (Box) Filter</option>
+                            <option value="gaussian" {% if selected_operation == 'gaussian' %}selected{% endif %}>Gaussian Filter</option>
+                            <option value="median" {% if selected_operation == 'median' %}selected{% endif %}>Median Filter</option>
+                        </optgroup>
+                        <optgroup label="Edge Detection">
+                            <option value="sobel" {% if selected_operation == 'sobel' %}selected{% endif %}>Sobel Edge Detection</option>
+                            <option value="prewitt" {% if selected_operation == 'prewitt' %}selected{% endif %}>Prewitt Edge Detection</option>
+                            <option value="roberts" {% if selected_operation == 'roberts' %}selected{% endif %}>Roberts Cross Edge Detection</option>
+                            <option value="auto_canny" {% if selected_operation == 'auto_canny' %}selected{% endif %}>Auto-Canny Edge Detection</option>
+                        </optgroup>
+                        <optgroup label="Frequency Domain & Hybrid">
+                            <option value="lowpass" {% if selected_operation == 'lowpass' %}selected{% endif %}>Ideal Low-Pass Filter (FFT)</option>
+                            <option value="highpass" {% if selected_operation == 'highpass' %}selected{% endif %}>Ideal High-Pass Filter (FFT)</option>
+                            <option value="hybrid" {% if selected_operation == 'hybrid' %}selected{% endif %}>Create Hybrid Image</option>
+                        </optgroup>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Dynamic Parameter Controls -->
+            <div class="form-grid">
+                <div class="form-group" id="group-kernel">
+                    <label for="kernel_size">Kernel Size (odd integer):</label>
+                    <input type="number" id="kernel_size" name="kernel_size" value="3" min="3" max="15" step="2">
+                </div>
+
+                <div class="form-group" id="group-sigma">
+                    <label for="sigma">Gaussian Sigma (σ):</label>
+                    <input type="number" id="sigma" name="sigma" value="1.0" min="0.1" max="10" step="0.1">
+                </div>
+
+                <div class="form-group" id="group-canny-sigma">
+                    <label for="canny_sigma">Auto-Canny Median Sigma:</label>
+                    <input type="number" id="canny_sigma" name="canny_sigma" value="0.33" min="0.01" max="1.0" step="0.01">
+                </div>
+
+                <div class="form-group" id="group-thresh">
+                    <label for="thresh_val">Global Threshold (0–255):</label>
+                    <input type="number" id="thresh_val" name="thresh_val" value="128" min="0" max="255" step="1">
+                </div>
+
+                <div class="form-group" id="group-iter-diff">
+                    <label for="iter_diff">Convergence Tolerance (diff):</label>
+                    <input type="number" id="iter_diff" name="iter_diff" value="0.001" min="0.0001" max="5" step="0.001">
+                </div>
+
+                <div class="form-group" id="group-local-win">
+                    <label for="local_win">Local Window Size (odd):</label>
+                    <input type="number" id="local_win" name="local_win" value="15" min="3" max="51" step="2">
+                </div>
+
+                <div class="form-group" id="group-local-c">
+                    <label for="local_c">Constant Offset (C):</label>
+                    <input type="number" id="local_c" name="local_c" value="5.0" step="0.5">
+                </div>
+
+                <div class="form-group" id="group-noise-mean">
+                    <label for="noise_mean">Noise Mean (μ):</label>
+                    <input type="number" id="noise_mean" name="noise_mean" value="0.0" step="1.0">
+                </div>
+
+                <div class="form-group" id="group-noise-sigma">
+                    <label for="noise_sigma">Noise Std Dev (σ):</label>
+                    <input type="number" id="noise_sigma" name="noise_sigma" value="25.0" min="1.0" max="150.0" step="1.0">
+                </div>
+
+                <div class="form-group" id="group-cutoff-low">
+                    <label for="cutoff_low">Low-Pass Cutoff Frequency (D₀):</label>
+                    <input type="number" id="cutoff_low" name="cutoff_low" value="25.0" min="1" max="500" step="1">
+                </div>
+
+                <div class="form-group" id="group-cutoff-high">
+                    <label for="cutoff_high">High-Pass Cutoff Frequency (D₀):</label>
+                    <input type="number" id="cutoff_high" name="cutoff_high" value="25.0" min="1" max="500" step="1">
+                </div>
+
+                <div class="form-group" id="group-alpha">
+                    <label for="alpha">Low-Pass Weight (α):</label>
+                    <input type="number" id="alpha" name="alpha" value="0.5" min="0" max="2" step="0.05">
+                </div>
+
+                <div class="form-group" id="group-beta">
+                    <label for="beta">High-Pass Weight (β):</label>
+                    <input type="number" id="beta" name="beta" value="0.5" min="0" max="2" step="0.05">
+                </div>
+            </div>
+
+            <div class="checkbox-group" id="group-gray-toggle">
+                <input type="checkbox" id="convert_gray" name="convert_gray">
+                <label for="convert_gray">Convert input(s) to Grayscale first (using manual rgb2gray)</label>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <button type="submit">Process Image</button>
+            </div>
+        </form>
+    </div>
+
+    {% if uploaded_image and processed_image %}
+        <div class="card results-grid">
+            <div class="image-box">
+                <h3>Original Image 1</h3>
+                <img src="{{ uploaded_image }}" alt="Original Image 1">
+            </div>
+
+            {% if uploaded_image_2 %}
+                <div class="image-box">
+                    <h3>Original Image 2</h3>
+                    <img src="{{ uploaded_image_2 }}" alt="Original Image 2">
+                </div>
+            {% endif %}
+
+            <div class="image-box">
+                <h3>Processed Result</h3>
+                <img src="{{ processed_image }}" alt="Processed Result">
+            </div>
+        </div>
+    {% endif %}
+
+    <script>
+        function setVisible(id, isVisible) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (isVisible) {
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+            }
+            // Disable inputs inside hidden groups so browser validation ignores them
+            const inputs = el.querySelectorAll('input, select');
+            inputs.forEach(input => {
+                input.disabled = !isVisible;
+            });
+        }
+
+        function updateFormFields() {
+            const op = document.getElementById('filter_type').value;
+
+            const isHybrid = (op === 'hybrid');
+            const isKernel = ['mean', 'gaussian', 'median', 'auto_canny'].includes(op);
+            const isGaussian = (op === 'gaussian');
+            const isAutoCanny = (op === 'auto_canny');
+            const isAwgn = (op === 'awgn');
+            const isLowPass = ['lowpass', 'hybrid'].includes(op);
+            const isHighPass = ['highpass', 'hybrid'].includes(op);
+            const isThresh = (op === 'threshold');
+            const isIterThresh = (op === 'iter_threshold');
+            const isLocalThresh = (op === 'local_threshold');
+
+            // Operations that automatically convert to grayscale internally
+            const autoGrayOps = ['rgb2gray', 'threshold', 'iter_threshold', 'local_threshold', 'equalize', 'auto_canny'];
+
+            setVisible('group-image2', isHybrid);
+            document.getElementById('image_2').required = isHybrid;
+
+            setVisible('group-kernel', isKernel);
+            setVisible('group-sigma', isGaussian);
+            setVisible('group-canny-sigma', isAutoCanny);
+            setVisible('group-thresh', isThresh);
+            setVisible('group-iter-diff', isIterThresh);
+            setVisible('group-local-win', isLocalThresh);
+            setVisible('group-local-c', isLocalThresh);
+            setVisible('group-noise-mean', isAwgn);
+            setVisible('group-noise-sigma', isAwgn);
+            setVisible('group-cutoff-low', isLowPass);
+            setVisible('group-cutoff-high', isHighPass);
+            setVisible('group-alpha', isHybrid);
+            setVisible('group-beta', isHybrid);
+            setVisible('group-gray-toggle', !autoGrayOps.includes(op));
+        }
+
+        document.addEventListener('DOMContentLoaded', updateFormFields);
+    </script>
+</body>
+</html>
