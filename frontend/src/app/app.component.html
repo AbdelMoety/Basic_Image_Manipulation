@@ -1,0 +1,169 @@
+<div class="wrap">
+  <header class="top">
+    <h1>{{ title }}</h1>
+    <p class="tagline">Task 1 — basic image manipulation (filters, edges, thresholding, FFT).</p>
+  </header>
+
+  @if (error) {
+    <p class="msg msg-err" role="alert">{{ error }}</p>
+  }
+  @if (info) {
+    <p class="msg msg-ok" role="status">{{ info }}</p>
+  }
+
+  <div class="columns">
+    <section class="box box-controls">
+      <h2>Controls</h2>
+
+      <label class="row">
+        <span class="lbl">Operation</span>
+        <select
+          [(ngModel)]="selectedOperation"
+          (ngModelChange)="onOperationChange()"
+          name="operation"
+        >
+          @for (group of groupedOperations; track group.group) {
+            <optgroup [label]="group.group">
+              @for (item of group.items; track item.id) {
+                <option [value]="item.id">{{ item.label }}</option>
+              }
+            </optgroup>
+          }
+        </select>
+      </label>
+
+      <label class="row">
+        <span class="lbl">Image 1</span>
+        <input type="file" accept="image/*" (change)="onPrimarySelected($event)" />
+      </label>
+      @if (primaryPreview) {
+        <img [src]="primaryPreview" alt="" class="thumb" />
+      }
+
+      @if (showImage2) {
+        <label class="row">
+          <span class="lbl">Image 2 (hybrid)</span>
+          <input type="file" accept="image/*" (change)="onSecondarySelected($event)" />
+        </label>
+        @if (secondaryPreview) {
+          <img [src]="secondaryPreview" alt="" class="thumb" />
+        }
+      }
+
+      @if (showGrayToggle) {
+        <label class="check">
+          <input type="checkbox" [(ngModel)]="params.convert_gray" name="convert_gray" />
+          Convert to grayscale first (manual rgb2gray)
+        </label>
+      }
+
+      <div class="params">
+        @if (showKernel) {
+          <label class="row half">
+            <span class="lbl">Kernel size</span>
+            <input type="number" [(ngModel)]="params.kernel_size" min="3" max="15" step="2" />
+          </label>
+        }
+        @if (showSigma) {
+          <label class="row half">
+            <span class="lbl">Sigma</span>
+            <input type="number" [(ngModel)]="params.sigma" min="0.1" max="10" step="0.1" />
+          </label>
+        }
+        @if (showCannySigma) {
+          <label class="row half">
+            <span class="lbl">Canny sigma</span>
+            <input type="number" [(ngModel)]="params.canny_sigma" min="0.01" max="1" step="0.01" />
+          </label>
+        }
+        @if (showThresh) {
+          <label class="row half">
+            <span class="lbl">Threshold</span>
+            <input type="number" [(ngModel)]="params.thresh_val" min="0" max="255" step="1" />
+          </label>
+        }
+        @if (showIterDiff) {
+          <label class="row half">
+            <span class="lbl">Iter. tolerance</span>
+            <input type="number" [(ngModel)]="params.iter_diff" min="0.0001" step="0.001" />
+          </label>
+        }
+        @if (showLocal) {
+          <label class="row half">
+            <span class="lbl">Window size</span>
+            <input type="number" [(ngModel)]="params.local_win" min="3" max="51" step="2" />
+          </label>
+          <label class="row half">
+            <span class="lbl">C</span>
+            <input type="number" [(ngModel)]="params.local_c" step="0.5" />
+          </label>
+        }
+        @if (showNoise) {
+          <label class="row half">
+            <span class="lbl">Noise mean</span>
+            <input type="number" [(ngModel)]="params.noise_mean" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Noise std</span>
+            <input type="number" [(ngModel)]="params.noise_sigma" min="1" max="150" step="1" />
+          </label>
+        }
+        @if (showCutoffLow) {
+          <label class="row half">
+            <span class="lbl">Low-pass D0</span>
+            <input type="number" [(ngModel)]="params.cutoff_low" min="1" max="500" step="1" />
+          </label>
+        }
+        @if (showCutoffHigh) {
+          <label class="row half">
+            <span class="lbl">High-pass D0</span>
+            <input type="number" [(ngModel)]="params.cutoff_high" min="1" max="500" step="1" />
+          </label>
+        }
+        @if (showHybridWeights) {
+          <label class="row half">
+            <span class="lbl">Alpha</span>
+            <input type="number" [(ngModel)]="params.alpha" min="0" max="2" step="0.05" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Beta</span>
+            <input type="number" [(ngModel)]="params.beta" min="0" max="2" step="0.05" />
+          </label>
+        }
+      </div>
+
+      <button type="button" class="submit" (click)="process()" [disabled]="loading">
+        {{ loading ? 'Working…' : 'Process image' }}
+      </button>
+    </section>
+
+    <section class="box box-results">
+      <h2>Result</h2>
+
+      @if (!result && !loading) {
+        <p class="empty">No output yet. Pick an operation, upload a file, and hit Process image.</p>
+      }
+
+      @if (result) {
+        <div class="pics">
+          <div class="pic">
+            <p class="cap">Original (1)</p>
+            <img [src]="mediaUrl(result.uploaded_image)!" alt="Image 1" />
+          </div>
+
+          @if (result.uploaded_image_2) {
+            <div class="pic">
+              <p class="cap">Original (2)</p>
+              <img [src]="mediaUrl(result.uploaded_image_2)!" alt="Image 2" />
+            </div>
+          }
+
+          <div class="pic pic-out">
+            <p class="cap">Output</p>
+            <img [src]="mediaUrl(result.processed_image)!" alt="Output" />
+          </div>
+        </div>
+      }
+    </section>
+  </div>
+</div>
