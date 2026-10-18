@@ -33,7 +33,7 @@
 
       <label class="row">
         <span class="lbl">Image 1</span>
-        <input type="file" accept="image/*" (change)="onPrimarySelected($event)" />
+        <input #primaryInput type="file" accept="image/*" (change)="onPrimarySelected($event)" />
       </label>
       @if (primaryPreview) {
         <img [src]="primaryPreview" alt="" class="thumb" />
@@ -146,7 +146,7 @@
       @if (result) {
         <div class="pics">
           <div class="pic">
-            <p class="cap">Original (1)</p>
+            <p class="cap">{{ chainStep > 0 ? 'Previous output (input)' : 'Original (1)' }}</p>
             <img [src]="mediaUrl(result.uploaded_image)!" alt="Image 1" />
           </div>
 
@@ -157,10 +157,32 @@
             </div>
           }
 
-          <div class="pic pic-out">
-            <p class="cap">Output</p>
-            <img [src]="mediaUrl(result.processed_image)!" alt="Output" />
-          </div>
+          @if (result.processed_image) {
+            <div class="pic pic-out">
+              <div class="cap-row">
+                <p class="cap">Output</p>
+                <button
+                  type="button"
+                  class="further"
+                  (click)="further()"
+                  [disabled]="!canFurther"
+                  [title]="
+                    resultOperation === 'plot_histograms'
+                      ? 'The histogram plot is a chart and cannot be processed further'
+                      : 'Use this output as the input image for another operation'
+                  "
+                >
+                  {{ furthering ? 'Loading…' : 'Further' }}
+                  <span class="arrow" aria-hidden="true">&rarr;</span>
+                </button>
+              </div>
+              <img [src]="mediaUrl(result.processed_image)!" alt="Output" />
+            </div>
+          } @else {
+            <p class="empty pending">
+              Output is now the input above. Choose an operation and press Process image.
+            </p>
+          }
         </div>
       }
     </section>

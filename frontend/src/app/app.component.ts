@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, ElementRef, OnInit, ViewChild, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 import { CvOperation, ProcessParams, ProcessResult } from './models/operation.model';
@@ -24,7 +24,9 @@ const AUTO_GRAY_OPS = new Set([
 export class AppComponent implements OnInit {
   private readonly api = inject(VisionApiService);
 
-  title = 'Computer Vision Work Space';
+  @ViewChild('primaryInput') private primaryInput?: ElementRef<HTMLInputElement>;
+
+  title = 'Computer Vision Workbench';
   operations: CvOperation[] = [];
   groupedOperations: { group: string; items: CvOperation[] }[] = [];
 
@@ -46,6 +48,10 @@ export class AppComponent implements OnInit {
     local_c: 5.0,
     noise_mean: 0,
     noise_sigma: 25,
+    sp_amount: 0.05,
+    sp_salt_ratio: 0.5,
+    uniform_low: -25,
+    uniform_high: 25,
     cutoff_low: 25,
     cutoff_high: 25,
     alpha: 0.5,
@@ -56,6 +62,12 @@ export class AppComponent implements OnInit {
   error: string | null = null;
   info: string | null = null;
   result: ProcessResult | null = null;
+
+  /** Operation that produced the current result (the dropdown may have changed since). */
+  resultOperation: string | null = null;
+  /** How many times "Further" has been used on the current image (0 = untouched upload). */
+  chainStep = 0;
+  furthering = false;
 
   ngOnInit(): void {
     this.api.listOperations().subscribe({
@@ -109,6 +121,14 @@ export class AppComponent implements OnInit {
     return this.op === 'awgn';
   }
 
+  get showSaltPepper(): boolean {
+    return this.op === 'salt_pepper';
+  }
+
+  get showUniform(): boolean {
+    return this.op === 'uniform_noise';
+  }
+
   get showCutoffLow(): boolean {
     return this.op === 'lowpass' || this.op === 'hybrid';
   }
@@ -121,6 +141,62 @@ export class AppComponent implements OnInit {
     return this.op === 'hybrid';
   }
 
+  /** The histogram operation outputs a chart, not an image that can be processed again. */
+  get canFurther(): boolean {
+    return (
+      !!this.result?.processed_image &&
+      this.resultOperation !== 'plot_histograms' &&
+      !this.loading &&
+      !this.furthering
+    );
+  }
+
+  /**
+   * Promote the current output to be the input image so another operation can be
+   * applied to it. The Original panel then shows the previous output.
+   */
+  async further(): Promise<void> {
+    const outUrl = this.mediaUrl(this.result?.processed_image);
+    if (!this.result || !outUrl || !this.canFurther) {
+      return;
+    }
+
+    this.furthering = true;
+    this.error = null;
+    try {
+      const resp = await fetch(outUrl);
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      const blob = await resp.blob();
+
+      // Short client-side name: the backend prefixes names on every pass, so reusing
+      // the server filename would grow until it hits the filesystem limit.
+      const ext = (outUrl.split('?')[0].match(/\.(png|jpe?g|bmp|webp|tiff?)$/i)?.[1] ?? 'png').toLowerCase();
+      this.chainStep += 1;
+      const file = new File([blob], `further_${this.chainStep}.${ext}`, {
+        type: blob.type || `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+      });
+
+      this.primaryFile = file;
+      this.revokePreview(this.primaryPreview);
+      this.primaryPreview = URL.createObjectURL(file);
+      this.syncPrimaryInput(file);
+
+      // Original panel -> previous output; Output panel waits for the next run.
+      this.result = {
+        uploaded_image: this.result.processed_image,
+        uploaded_image_2: this.result.uploaded_image_2,
+      };
+      this.resultOperation = null;
+      this.info = 'Output is now the input image. Choose an operation and press Process image.';
+    } catch {
+      this.error = 'Could not load the output image to continue from it.';
+    } finally {
+      this.furthering = false;
+    }
+  }
+
   onOperationChange(): void {
     this.params.filter_type = this.selectedOperation;
     this.error = null;
@@ -131,6 +207,7 @@ export class AppComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0] ?? null;
     this.primaryFile = file;
+    this.chainStep = 0;
     this.revokePreview(this.primaryPreview);
     this.primaryPreview = file ? URL.createObjectURL(file) : null;
   }
@@ -173,6 +250,10 @@ export class AppComponent implements OnInit {
       'local_c',
       'noise_mean',
       'noise_sigma',
+      'sp_amount',
+      'sp_salt_ratio',
+      'uniform_low',
+      'uniform_high',
       'cutoff_low',
       'cutoff_high',
       'alpha',
@@ -187,6 +268,8 @@ export class AppComponent implements OnInit {
     this.info = null;
     this.result = null;
 
+    const operationUsed = this.selectedOperation;
+
     this.api.processImage(form).subscribe({
       next: (res) => {
         this.loading = false;
@@ -195,6 +278,7 @@ export class AppComponent implements OnInit {
           return;
         }
         this.result = res;
+        this.resultOperation = operationUsed;
         this.info = res.info ?? null;
       },
       error: (err) => {
@@ -216,6 +300,21 @@ export class AppComponent implements OnInit {
       map.set(op.group, list);
     }
     return Array.from(map.entries()).map(([group, items]) => ({ group, items }));
+  }
+
+  /** Make the "Image 1" file input display the promoted file instead of the old upload. */
+  private syncPrimaryInput(file: File): void {
+    const input = this.primaryInput?.nativeElement;
+    if (!input) {
+      return;
+    }
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+    } catch {
+      /* Older browsers: the preview and primaryFile are still correct. */
+    }
   }
 
   private revokePreview(url: string | null): void {
