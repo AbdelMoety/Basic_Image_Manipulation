@@ -33,3 +33,25 @@ export interface ProcessParams {
   alpha: number;
   beta: number;
 }
+
+/** The two output windows. */
+export type WindowKey = 'out1' | 'out2';
+
+/** One finished run, kept in the session history. */
+export interface RunEntry {
+  id: string;
+  title: string;
+  opId: string;
+  /** Path/URL returned by the backend (pass through mediaUrl() before use). */
+  url: string;
+  /** Charts (histograms) can be viewed but not fed back in as an input image. */
+  isChart: boolean;
+}
+
+/** What an output window is currently showing. */
+export interface WindowView {
+  url: string | null;
+  label: string;
+  empty: string;
+  run: RunEntry | null;
+}
