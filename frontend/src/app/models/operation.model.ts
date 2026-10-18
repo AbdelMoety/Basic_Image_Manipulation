@@ -24,6 +24,10 @@ export interface ProcessParams {
   local_c: number;
   noise_mean: number;
   noise_sigma: number;
+  sp_amount: number;
+  sp_salt_ratio: number;
+  uniform_low: number;
+  uniform_high: number;
   cutoff_low: number;
   cutoff_high: number;
   alpha: number;
