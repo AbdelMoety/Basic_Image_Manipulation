@@ -46,6 +46,16 @@ OPERATIONS = [
         "label": "Add White Gaussian Noise (AWGN)",
         "group": "Noise & Spatial Smoothing",
     },
+    {
+        "id": "salt_pepper",
+        "label": "Add Salt & Pepper Noise",
+        "group": "Noise & Spatial Smoothing",
+    },
+    {
+        "id": "uniform_noise",
+        "label": "Add Uniform Noise",
+        "group": "Noise & Spatial Smoothing",
+    },
     {"id": "mean", "label": "Mean (Box) Filter", "group": "Noise & Spatial Smoothing"},
     {"id": "gaussian", "label": "Gaussian Filter", "group": "Noise & Spatial Smoothing"},
     {"id": "median", "label": "Median Filter", "group": "Noise & Spatial Smoothing"},
