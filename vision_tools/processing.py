@@ -1,9 +1,9 @@
 import os
 import uuid
-
+import hashlib
 import cv2
 from django.core.files.storage import FileSystemStorage
-
+import numpy as np
 from . import utils
 
 
@@ -11,6 +11,35 @@ def _save_uploaded_file(fs: FileSystemStorage, uploaded_file):
     unique_name = f"{uuid.uuid4().hex[:8]}_{uploaded_file.name}"
     filename = fs.save(unique_name, uploaded_file)
     return fs.path(filename), fs.url(filename)
+
+def _file_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _get_shifted_fft(fs: FileSystemStorage, content_hash: str, image: np.ndarray):
+    """Return (fft_shifted, cache_hit). Key = source file hash + final array shape + gray/color."""
+    h, w = image.shape[:2]
+    tag = "gray" if image.ndim == 2 else "color"
+    cache_dir = fs.path("fft_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    base = f"{content_hash}_{h}x{w}_{tag}"
+    cache_path = os.path.join(cache_dir, f"{base}.npy")
+
+    if os.path.exists(cache_path):
+        try:
+            return np.load(cache_path), True
+        except (OSError, ValueError):
+            pass
+
+    fft_shifted = utils.shifted_fft(image).astype(np.complex64)
+    tmp_path = os.path.join(cache_dir, f"{base}.{uuid.uuid4().hex[:6]}.tmp.npy")
+    np.save(tmp_path, fft_shifted)
+    os.replace(tmp_path, cache_path)
+    return fft_shifted, False
 
 
 def process_image_upload(request_files, request_post):
@@ -122,14 +151,16 @@ def process_image_upload(request_files, request_post):
                 f"(Blur Kernel: {kernel_size}×{kernel_size})"
             )
 
-        elif operation == "lowpass":
+        elif operation in ("lowpass", "highpass"):
+            cutoff = cutoff_low if operation == "lowpass" else cutoff_high
+            content_hash = _file_sha256(img1_path)
+            fft_shifted, cache_hit = _get_shifted_fft(fs, content_hash, img1_work)
             result_img = utils.frequency_filter_pipeline(
-                img1_work, cutoff=cutoff_low, filter_type="lowpass"
+                img1_work, cutoff=cutoff, filter_type=operation, fft_shifted=fft_shifted
             )
-
-        elif operation == "highpass":
-            result_img = utils.frequency_filter_pipeline(
-                img1_work, cutoff=cutoff_high, filter_type="highpass"
+            context["info"] = (
+                f"{'Low' if operation == 'lowpass' else 'High'}-pass, cutoff = {cutoff} "
+                f"(FFT {'loaded from cache' if cache_hit else 'computed and cached'})"
             )
 
         elif operation == "hybrid":
@@ -144,6 +175,15 @@ def process_image_upload(request_files, request_post):
                 return context
 
             img2_work = utils.ensure_gray_from_bgr(img2) if apply_gray else img2
+
+            hashes = {1: _file_sha256(img1_path), 2: _file_sha256(img2_path)}
+            hits = {}
+
+            def fft_getter(img, idx):
+                fft, hit = _get_shifted_fft(fs, hashes[idx], img)
+                hits[idx] = hit
+                return fft
+
             result_img = utils.create_hybrid_image(
                 img1_work,
                 img2_work,
@@ -151,9 +191,16 @@ def process_image_upload(request_files, request_post):
                 cutoff_high=cutoff_high,
                 alpha=alpha,
                 beta=beta,
+                fft_getter=fft_getter,
             )
             context["uploaded_image_2"] = img2_url
+            context["info"] = (
+                "Hybrid image — FFT cache: "
+                f"image 1 {'hit' if hits.get(1) else 'miss'}, "
+                f"image 2 {'hit' if hits.get(2) else 'miss'}"
+            )
 
+        
         elif operation == "threshold":
             result_img = utils.threshold_img(img1_work, threshold=thresh_val)
             context["info"] = f"Applied Manual Global Threshold T = {thresh_val}"

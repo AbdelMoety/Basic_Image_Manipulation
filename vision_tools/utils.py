@@ -81,9 +81,17 @@ def apply_frequency_filter(freq_mask: np.ndarray, fft_shifted: np.ndarray, proce
     return _process_matrix(spatial_image) if process else spatial_image
 
 
-def frequency_filter_pipeline(image: np.ndarray, cutoff: float, filter_type: str = "lowpass", process: bool = True) -> np.ndarray:
-    """End-to-end helper to apply low-pass or high-pass filtering to an image."""
-    fft_shifted = shifted_fft(image)
+def frequency_filter_pipeline(
+    image: np.ndarray,
+    cutoff: float,
+    filter_type: str = "lowpass",
+    process: bool = True,
+    fft_shifted: np.ndarray | None = None,
+) -> np.ndarray:
+    """End-to-end helper to apply low-pass or high-pass filtering to an image.
+    If fft_shifted is given, the forward FFT is skipped."""
+    if fft_shifted is None:
+        fft_shifted = shifted_fft(image)
     if filter_type == "lowpass":
         mask = create_low_pass_filter(image.shape, cutoff)
     elif filter_type == "highpass":
@@ -102,6 +110,7 @@ def create_hybrid_image(
     alpha: float = 0.5,
     beta: float = 0.5,
     process: bool = True,
+    fft_getter=None,  # callable(image, source_index) -> shifted FFT, or None
 ) -> np.ndarray:
     """Combines low-frequency components of image_1 with high-frequency components of image_2."""
     img1, img2 = resize_images_to_match(image_1, image_2)
@@ -109,8 +118,15 @@ def create_hybrid_image(
         img1 = ensure_gray_from_bgr(img1)
         img2 = ensure_gray_from_bgr(img2)
 
-    low_passed = frequency_filter_pipeline(img1, cutoff_low, filter_type="lowpass", process=False)
-    high_passed = frequency_filter_pipeline(img2, cutoff_high, filter_type="highpass", process=False)
+    fft_1 = fft_getter(img1, 1) if fft_getter else None
+    fft_2 = fft_getter(img2, 2) if fft_getter else None
+
+    low_passed = frequency_filter_pipeline(
+        img1, cutoff_low, filter_type="lowpass", process=False, fft_shifted=fft_1
+    )
+    high_passed = frequency_filter_pipeline(
+        img2, cutoff_high, filter_type="highpass", process=False, fft_shifted=fft_2
+    )
 
     hybrid = (alpha * low_passed) + (beta * high_passed)
     return _process_matrix(hybrid) if process else hybrid
