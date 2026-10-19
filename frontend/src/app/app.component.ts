@@ -50,7 +50,8 @@ export class AppComponent implements OnInit {
     convert_gray: false,
     kernel_size: 3,
     sigma: 1.0,
-    canny_sigma: 0.33,
+    canny_low: 50,
+    canny_high: 150,
     thresh_val: 128,
     iter_diff: 0.001,
     local_win: 15,
@@ -115,7 +116,7 @@ export class AppComponent implements OnInit {
   get showSigma(): boolean {
     return this.op === 'gaussian';
   }
-  get showCannySigma(): boolean {
+  get showCannyThresh(): boolean {
     return this.op === 'auto_canny';
   }
   get showThresh(): boolean {
@@ -147,7 +148,7 @@ export class AppComponent implements OnInit {
   }
   get hasParams(): boolean {
     return (
-      this.showKernel || this.showSigma || this.showCannySigma || this.showThresh ||
+      this.showKernel || this.showSigma || this.showCannyThresh || this.showThresh ||
       this.showIterDiff || this.showLocal || this.showNoise || this.showSaltPepper ||
       this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
       this.showGrayToggle
@@ -268,7 +269,7 @@ export class AppComponent implements OnInit {
     }
 
     const numericKeys: (keyof ProcessParams)[] = [
-      'kernel_size', 'sigma', 'canny_sigma', 'thresh_val', 'iter_diff', 'local_win', 'local_c',
+      'kernel_size', 'sigma', 'canny_low', 'canny_high', 'thresh_val', 'iter_diff', 'local_win', 'local_c',
       'noise_mean', 'noise_sigma', 'sp_amount', 'sp_salt_ratio', 'uniform_low', 'uniform_high',
       'cutoff_low', 'cutoff_high', 'alpha', 'beta',
     ];

@@ -62,7 +62,7 @@ OPERATIONS = [
     {"id": "sobel", "label": "Sobel Edge Detection", "group": "Edge Detection"},
     {"id": "prewitt", "label": "Prewitt Edge Detection", "group": "Edge Detection"},
     {"id": "roberts", "label": "Roberts Cross Edge Detection", "group": "Edge Detection"},
-    {"id": "auto_canny", "label": "Auto-Canny Edge Detection", "group": "Edge Detection"},
+    {"id": "auto_canny", "label": "Canny Edge Detection", "group": "Edge Detection"},
     {
         "id": "lowpass",
         "label": "Ideal Low-Pass Filter (FFT)",

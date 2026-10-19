@@ -147,7 +147,7 @@
                             <option value="sobel" {% if selected_operation == 'sobel' %}selected{% endif %}>Sobel Edge Detection</option>
                             <option value="prewitt" {% if selected_operation == 'prewitt' %}selected{% endif %}>Prewitt Edge Detection</option>
                             <option value="roberts" {% if selected_operation == 'roberts' %}selected{% endif %}>Roberts Cross Edge Detection</option>
-                            <option value="auto_canny" {% if selected_operation == 'auto_canny' %}selected{% endif %}>Auto-Canny Edge Detection</option>
+                            <option value="auto_canny" {% if selected_operation == 'auto_canny' %}selected{% endif %}>Canny Edge Detection</option>
                         </optgroup>
                         <optgroup label="Frequency Domain & Hybrid">
                             <option value="lowpass" {% if selected_operation == 'lowpass' %}selected{% endif %}>Ideal Low-Pass Filter (FFT)</option>
@@ -170,9 +170,14 @@
                     <input type="number" id="sigma" name="sigma" value="1.0" min="0.1" max="10" step="0.1">
                 </div>
 
-                <div class="form-group" id="group-canny-sigma">
-                    <label for="canny_sigma">Auto-Canny Median Sigma:</label>
-                    <input type="number" id="canny_sigma" name="canny_sigma" value="0.33" min="0.01" max="1.0" step="0.01">
+                <div class="form-group" id="group-canny-low">
+                    <label for="canny_low">Canny Lower Threshold:</label>
+                    <input type="number" id="canny_low" name="canny_low" value="50" min="0" max="1000" step="1">
+                </div>
+
+                <div class="form-group" id="group-canny-high">
+                    <label for="canny_high">Canny Upper Threshold:</label>
+                    <input type="number" id="canny_high" name="canny_high" value="150" min="0" max="1000" step="1">
                 </div>
 
                 <div class="form-group" id="group-thresh">
@@ -296,7 +301,8 @@
 
             setVisible('group-kernel', isKernel);
             setVisible('group-sigma', isGaussian);
-            setVisible('group-canny-sigma', isAutoCanny);
+            setVisible('group-canny-low', isAutoCanny);
+            setVisible('group-canny-high', isAutoCanny);
             setVisible('group-thresh', isThresh);
             setVisible('group-iter-diff', isIterThresh);
             setVisible('group-local-win', isLocalThresh);

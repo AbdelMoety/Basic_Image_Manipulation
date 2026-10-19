@@ -282,13 +282,15 @@ def roberts_edge_detection(image: np.ndarray) -> np.ndarray:
     return _edge_magnitude(image, kx, ky)
 
 
-def auto_canny(image: np.ndarray, sigma: float = 0.33, blur_ksize: int = 5):
-    """Canny with manual separable Gaussian pre-blur and median-derived thresholds."""
+def auto_canny(image: np.ndarray, low_threshold: float = 50, high_threshold: float = 150, blur_ksize: int = 5):
+    """Canny with manual separable Gaussian pre-blur and user-supplied hysteresis thresholds."""
+    low, high = int(low_threshold), int(high_threshold)
+    if low < 0 or high < 0:
+        raise ValueError("Canny thresholds must not be negative.")
+    if low >= high:
+        raise ValueError("Canny: the lower threshold must be smaller than the upper threshold.")
     gray = ensure_gray_from_bgr(image)
     blurred = gaussian_filter(gray, kernel_size=blur_ksize, sigma=0.0)
-    med = np.median(blurred)
-    low = int(max(0, (1.0 - sigma) * med))
-    high = int(min(255, (1.0 + sigma) * med))
     return cv2.Canny(blurred, low, high), (low, high)
 
 

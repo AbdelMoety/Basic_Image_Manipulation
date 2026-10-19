@@ -17,7 +17,8 @@ export interface ProcessParams {
   convert_gray: boolean;
   kernel_size: number;
   sigma: number;
-  canny_sigma: number;
+  canny_low: number;
+  canny_high: number;
   thresh_val: number;
   iter_diff: number;
   local_win: number;

@@ -57,7 +57,8 @@ def process_image_upload(request_files, request_post):
     iter_diff = float(request_post.get("iter_diff") or 0.001)
     local_win = int(request_post.get("local_win") or 15)
     local_c = float(request_post.get("local_c") or 5.0)
-    canny_sigma = float(request_post.get("canny_sigma") or 0.33)
+    canny_low = float(request_post.get("canny_low") or 50)
+    canny_high = float(request_post.get("canny_high") or 150)
 
     if kernel_size < 3:
         kernel_size = 3
@@ -111,10 +112,13 @@ def process_image_upload(request_files, request_post):
 
         elif operation == "auto_canny":
             result_img, (low, high) = utils.auto_canny(
-                img1_work, sigma=canny_sigma, blur_ksize=kernel_size
+                img1_work,
+                low_threshold=canny_low,
+                high_threshold=canny_high,
+                blur_ksize=kernel_size,
             )
             context["info"] = (
-                f"Auto-Canny Thresholds — Low: {low}, High: {high} "
+                f"Canny Thresholds — Low: {low}, High: {high} "
                 f"(Blur Kernel: {kernel_size}×{kernel_size})"
             )
 
