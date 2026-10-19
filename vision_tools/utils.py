@@ -144,6 +144,47 @@ def add_awgn(image: np.ndarray, mean: float = 0.0, sigma: float = 25.0) -> np.nd
     return _process_matrix(noisy_image)
 
 
+def add_salt_and_pepper_noise(image: np.ndarray, amount: float = 0.05, salt_ratio: float = 0.5) -> np.ndarray:
+    """
+    Adds salt-and-pepper (impulse) noise to a 2D or 3D image array.
+
+    amount:      fraction of pixels corrupted, in [0, 1].
+    salt_ratio:  share of the corrupted pixels that become salt (white, 255);
+                 the rest become pepper (black, 0). 0.5 gives an even mix.
+
+    The mask is drawn per pixel *location*, so on color images a corrupted pixel is
+    pure white/black in every channel instead of a random color speckle.
+    """
+    if not 0.0 <= amount <= 1.0:
+        raise ValueError("Salt & pepper amount must be between 0 and 1.")
+    if not 0.0 <= salt_ratio <= 1.0:
+        raise ValueError("Salt ratio must be between 0 and 1.")
+
+    rng = np.random.default_rng()
+    noisy_image = image.copy()
+
+    # One uniform draw per pixel: [0, salt_end) -> salt, [salt_end, amount) -> pepper.
+    draw = rng.random(image.shape[:2])
+    salt_end = amount * salt_ratio
+    noisy_image[draw < salt_end] = 255
+    noisy_image[(draw >= salt_end) & (draw < amount)] = 0
+    return noisy_image
+
+
+def add_uniform_noise(image: np.ndarray, low: float = -25.0, high: float = 25.0) -> np.ndarray:
+    """
+    Adds uniformly distributed noise U(low, high) to a 2D or 3D image array.
+    Each value is drawn independently per pixel and per channel (same as add_awgn).
+    """
+    if low > high:
+        raise ValueError("Uniform noise: the lower bound must not exceed the upper bound.")
+
+    rng = np.random.default_rng()
+    noise = rng.uniform(low, high, image.shape).astype(np.float32)
+    noisy_image = image.astype(np.float32) + noise
+    return _process_matrix(noisy_image)
+
+
 def convolve(image: np.ndarray, kernel: np.ndarray, clip: bool = True) -> np.ndarray:
     """
     Fast vectorized 2D convolution (from scratch).

@@ -24,3 +24,8 @@ select {
   font-family: inherit;
   font-size: inherit;
 }
+
+:focus-visible {
+  outline: 2px solid #f0c000;
+  outline-offset: 2px;
+}

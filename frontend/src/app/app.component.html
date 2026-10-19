@@ -11,6 +11,7 @@
   }
 
   <div class="columns">
+    <!-- ============ controls ============ -->
     <section class="box box-controls">
       <h2>Controls</h2>
 
@@ -33,20 +34,14 @@
 
       <label class="row">
         <span class="lbl">Image 1</span>
-        <input type="file" accept="image/*" (change)="onPrimarySelected($event)" />
+        <input #primaryInput type="file" accept="image/*" (change)="onPrimarySelected($event)" />
       </label>
-      @if (primaryPreview) {
-        <img [src]="primaryPreview" alt="" class="thumb" />
-      }
 
       @if (showImage2) {
         <label class="row">
           <span class="lbl">Image 2 (hybrid)</span>
           <input type="file" accept="image/*" (change)="onSecondarySelected($event)" />
         </label>
-        @if (secondaryPreview) {
-          <img [src]="secondaryPreview" alt="" class="thumb" />
-        }
       }
 
       @if (showGrayToggle) {
@@ -107,6 +102,26 @@
             <input type="number" [(ngModel)]="params.noise_sigma" min="1" max="150" step="1" />
           </label>
         }
+        @if (showSaltPepper) {
+          <label class="row half">
+            <span class="lbl">Amount</span>
+            <input type="number" [(ngModel)]="params.sp_amount" min="0" max="1" step="0.01" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Salt ratio</span>
+            <input type="number" [(ngModel)]="params.sp_salt_ratio" min="0" max="1" step="0.05" />
+          </label>
+        }
+        @if (showUniform) {
+          <label class="row half">
+            <span class="lbl">Low</span>
+            <input type="number" [(ngModel)]="params.uniform_low" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">High</span>
+            <input type="number" [(ngModel)]="params.uniform_high" step="1" />
+          </label>
+        }
         @if (showCutoffLow) {
           <label class="row half">
             <span class="lbl">Low-pass D0</span>
@@ -131,37 +146,101 @@
         }
       </div>
 
+      <fieldset class="target">
+        <legend>Show result in</legend>
+        <label>
+          <input type="radio" name="target" value="out1" [(ngModel)]="target" />
+          <span>Output 1</span>
+        </label>
+        <label>
+          <input type="radio" name="target" value="out2" [(ngModel)]="target" />
+          <span>Output 2</span>
+        </label>
+      </fieldset>
+
       <button type="button" class="submit" (click)="process()" [disabled]="loading">
         {{ loading ? 'Working…' : 'Process image' }}
       </button>
     </section>
 
-    <section class="box box-results">
-      <h2>Result</h2>
-
-      @if (!result && !loading) {
-        <p class="empty">No output yet. Pick an operation, upload a file, and hit Process image.</p>
-      }
-
-      @if (result) {
-        <div class="pics">
-          <div class="pic">
-            <p class="cap">Original (1)</p>
-            <img [src]="mediaUrl(result.uploaded_image)!" alt="Image 1" />
-          </div>
-
-          @if (result.uploaded_image_2) {
-            <div class="pic">
-              <p class="cap">Original (2)</p>
-              <img [src]="mediaUrl(result.uploaded_image_2)!" alt="Image 2" />
+    <!-- ============ 1 input + 2 outputs ============ -->
+    <section class="views">
+      <!-- input window -->
+      <article class="win">
+        <header class="win-head">
+          <h3>Input</h3>
+          @if (showImage2) {
+            <div class="tabs" role="group" aria-label="Input image">
+              <button type="button" [class.on]="inputTab === 1" (click)="inputTab = 1">Image 1</button>
+              <button type="button" [class.on]="inputTab === 2" (click)="inputTab = 2">Image 2</button>
             </div>
           }
-
-          <div class="pic pic-out">
-            <p class="cap">Output</p>
-            <img [src]="mediaUrl(result.processed_image)!" alt="Output" />
-          </div>
+        </header>
+        <div class="stage" [appZoomPan]="inputUrl" title="Scroll to zoom, drag to pan, double-click to reset">
+          @if (inputUrl) {
+            <img [src]="inputUrl" alt="Input image" />
+          } @else {
+            <p class="blank">Choose {{ inputTab === 2 ? 'Image 2' : 'Image 1' }} in Controls.</p>
+          }
         </div>
+        <footer class="win-foot">
+          <span class="meta">
+            {{ inputTab === 2 ? (secondaryFile?.name ?? '') : chainStep > 0 ? 'Previous output' : (primaryFile?.name ?? '') }}
+          </span>
+        </footer>
+      </article>
+
+      <!-- output windows -->
+      @for (key of outputKeys; track key) {
+        @if (view(key); as v) {
+          <article class="win win-out">
+            <header class="win-head">
+              <h3>{{ key === 'out1' ? 'Output 1' : 'Output 2' }}</h3>
+              <select
+                class="pick"
+                [attr.aria-label]="'What ' + (key === 'out1' ? 'Output 1' : 'Output 2') + ' shows'"
+                [ngModel]="slots[key]"
+                (ngModelChange)="setSlot(key, $event)"
+                [name]="'slot_' + key"
+              >
+                <option value="">Empty</option>
+                @for (r of runs; track r.id) {
+                  <option [value]="r.id">{{ r.title }}</option>
+                }
+              </select>
+            </header>
+
+            <div class="stage" [appZoomPan]="v.url" title="Scroll to zoom, drag to pan, double-click to reset">
+              @if (v.url) {
+                <img [src]="v.url" [alt]="v.label" />
+              } @else {
+                <p class="blank">{{ v.empty }}</p>
+              }
+              @if (loading && target === key) {
+                <div class="busy"><span class="spin"></span>Working…</div>
+              }
+            </div>
+
+            <footer class="win-foot">
+              <span class="meta" [title]="v.label">{{ v.label }}</span>
+              <button type="button" class="mini" (click)="download(key)" [disabled]="!v.url">Save</button>
+              <button
+                type="button"
+                class="further"
+                (click)="further(v.run)"
+                [disabled]="!canFurther(v.run)"
+                [title]="
+                  v.run?.isChart
+                    ? 'The histogram plot is a chart and cannot be processed further'
+                    : 'Use this output as the input image for another operation'
+                "
+              >
+                {{ furthering ? 'Loading…' : 'Further' }}
+                <span class="arrow" aria-hidden="true">&rarr;</span>
+              </button>
+            </footer>
+          </article>
+        }
       }
     </section>
   </div>

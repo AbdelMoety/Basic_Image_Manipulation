@@ -78,6 +78,10 @@ def process_image_upload(request_files, request_post):
     cutoff_high = float(request_post.get("cutoff_high") or 25.0)
     alpha = float(request_post.get("alpha") or 0.5)
     beta = float(request_post.get("beta") or 0.5)
+    sp_amount = float(request_post.get("sp_amount") or 0.05)
+    sp_salt_ratio = float(request_post.get("sp_salt_ratio") or 0.5)
+    uniform_low = float(request_post.get("uniform_low") or -25.0)
+    uniform_high = float(request_post.get("uniform_high") or 25.0)
     thresh_val = float(request_post.get("thresh_val") or 128.0)
     iter_diff = float(request_post.get("iter_diff") or 0.001)
     local_win = int(request_post.get("local_win") or 15)
@@ -102,6 +106,19 @@ def process_image_upload(request_files, request_post):
 
         elif operation == "awgn":
             result_img = utils.add_awgn(img1_work, mean=noise_mean, sigma=noise_sigma)
+
+        elif operation == "salt_pepper":
+            result_img = utils.add_salt_and_pepper_noise(
+                img1_work, amount=sp_amount, salt_ratio=sp_salt_ratio
+            )
+            context["info"] = (
+                f"Salt & Pepper Noise — Amount: {sp_amount * 100:.1f}% of pixels, "
+                f"Salt ratio: {sp_salt_ratio * 100:.0f}%"
+            )
+
+        elif operation == "uniform_noise":
+            result_img = utils.add_uniform_noise(img1_work, low=uniform_low, high=uniform_high)
+            context["info"] = f"Uniform Noise U({uniform_low:g}, {uniform_high:g})"
 
         elif operation == "mean":
             result_img = utils.mean_filter(img1_work, kernel_size=kernel_size)
