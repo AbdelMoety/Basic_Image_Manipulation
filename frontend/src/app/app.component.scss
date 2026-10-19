@@ -434,3 +434,40 @@ $text-muted: #aaa;
     outline-offset: 2px;
   }
 }
+
+/* ---------- window header tools + full screen ---------- */
+.head-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fs {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  color: $yellow;
+  border: 1px solid $border;
+  cursor: pointer;
+
+  &:hover {
+    background: $yellow;
+    color: #111;
+    border-color: $yellow;
+  }
+}
+
+.win:fullscreen {
+  background: $black;
+
+  .stage {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+  }
+}

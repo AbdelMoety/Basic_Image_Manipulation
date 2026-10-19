@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, OnInit, ViewChild, inject } from '@angular/core';
+import { Component, ElementRef, HostListener, OnInit, ViewChild, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ZoomPanDirective } from './directives/zoom-pan.directive';
 
@@ -87,6 +87,9 @@ export class AppComponent implements OnInit {
   /** Which output window the next run will appear in (chosen in Controls). */
   target: WindowKey = 'out1';
   readonly outputKeys: WindowKey[] = ['out1', 'out2'];
+
+  /** The window currently shown full screen (null when none). */
+  fullscreenEl: Element | null = null;
 
   ngOnInit(): void {
     this.api.listOperations().subscribe({
@@ -176,6 +179,26 @@ export class AppComponent implements OnInit {
 
   setSlot(key: WindowKey, value: string): void {
     this.slots[key] = value;
+  }
+
+  toggleFullscreen(win: HTMLElement): void {
+    if (document.fullscreenElement === win) {
+      void document.exitFullscreen();
+      return;
+    }
+    if (!win.requestFullscreen) {
+      this.error = 'Full screen is not supported in this browser.';
+      return;
+    }
+    win.requestFullscreen().catch(() => {
+      this.error = 'Could not enter full screen.';
+    });
+  }
+
+  /** Fires on enter/exit, including when the user leaves with Esc. */
+  @HostListener('document:fullscreenchange')
+  onFullscreenChange(): void {
+    this.fullscreenEl = document.fullscreenElement;
   }
 
   canFurther(run: RunEntry | null): boolean {
