@@ -131,13 +131,13 @@ def process_image_upload(request_files, request_post):
             result_img = utils.median_filter(img1_work, kernel_size=kernel_size)
 
         elif operation == "sobel":
-            result_img = utils.sobel_edge_detection(img1_work)
+            result_img , _ , _ , _ = utils.sobel_edge_detection(img1_work)
 
         elif operation == "prewitt":
-            result_img = utils.prewitt_edge_detection(img1_work)
+            result_img , _ , _ , _ = utils.prewitt_edge_detection(img1_work)
 
         elif operation == "roberts":
-            result_img = utils.roberts_edge_detection(img1_work)
+            result_img , _ , _ , _ = utils.roberts_edge_detection(img1_work)
 
         elif operation == "auto_canny":
             result_img, (low, high) = utils.auto_canny(
@@ -149,6 +149,19 @@ def process_image_upload(request_files, request_post):
             context["info"] = (
                 f"Canny Thresholds — Low: {low}, High: {high} "
                 f"(Blur Kernel: {kernel_size}×{kernel_size})"
+            )
+
+        elif operation == "manual_canny":
+            result_img = utils.manual_canny(
+                img1_work,
+                low_threshold=canny_low,
+                high_threshold=canny_high,
+                sigma=sigma,
+                gaussian_kernel_size=kernel_size,
+            )
+            context["info"] = (
+                f"Manual Canny — Low: {canny_low:g}, High: {canny_high:g} "
+                f"(Gaussian: {kernel_size}×{kernel_size}, σ = {sigma:g})"
             )
 
         elif operation in ("lowpass", "highpass"):

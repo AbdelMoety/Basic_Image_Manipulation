@@ -19,6 +19,7 @@ const AUTO_GRAY_OPS = new Set([
   'local_threshold',
   'equalize',
   'auto_canny',
+  'manual_canny',
 ]);
 
 const MAX_RUNS = 30;
@@ -114,13 +115,13 @@ export class AppComponent implements OnInit {
     return this.op === 'hybrid';
   }
   get showKernel(): boolean {
-    return ['mean', 'gaussian', 'median', 'auto_canny'].includes(this.op);
+    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny'].includes(this.op);
   }
   get showSigma(): boolean {
-    return this.op === 'gaussian';
+    return this.op === 'gaussian' || this.op === 'manual_canny';
   }
   get showCannyThresh(): boolean {
-    return this.op === 'auto_canny';
+    return this.op === 'auto_canny' || this.op === 'manual_canny';
   }
   get showThresh(): boolean {
     return this.op === 'threshold';

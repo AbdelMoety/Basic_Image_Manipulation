@@ -1,3 +1,5 @@
+from collections import deque
+
 import cv2
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -272,18 +274,22 @@ def median_filter(image: np.ndarray, kernel_size: int = 3) -> np.ndarray:
 # 4. Edge Detection Operators
 # ==========================================
 
-def _edge_magnitude(image: np.ndarray, kx: np.ndarray, ky: np.ndarray) -> np.ndarray:
+def _edge_magnitude(image: np.ndarray, kx: np.ndarray, ky: np.ndarray , process = True) -> np.ndarray:
     """Convolves with horizontal and vertical gradient kernels: sqrt(Gx^2 + Gy^2)."""
     gx = convolve(image, kx, clip=False)
     gy = convolve(image, ky, clip=False)
     magnitude = np.hypot(gx, gy)
-    return _process_matrix(magnitude)
+    theta = np.arctan2(gy, gx)
+    if process:
+      magnitude = _process_matrix(magnitude)
+    return magnitude , gx , gy , theta
 
 
-def sobel_edge_detection(image: np.ndarray) -> np.ndarray:
+def sobel_edge_detection(image: np.ndarray, process: bool = True):
+    """Returns (magnitude, gx, gy, theta). With process=False the magnitude stays float (unclipped)."""
     kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
     ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32)
-    return _edge_magnitude(image, kx, ky)
+    return _edge_magnitude(image, kx, ky, process=process)
 
 
 def prewitt_edge_detection(image: np.ndarray) -> np.ndarray:
@@ -308,6 +314,88 @@ def auto_canny(image: np.ndarray, low_threshold: float = 50, high_threshold: flo
     gray = ensure_gray_from_bgr(image)
     blurred = gaussian_filter(gray, kernel_size=blur_ksize, sigma=0.0)
     return cv2.Canny(blurred, low, high), (low, high)
+
+
+# ---- Manual Canny (from scratch) ----
+
+def mapping(values: np.ndarray, ranges, index_mapping) -> np.ndarray:
+    """Maps every value to index_mapping[k], where k is the first range [lo, hi) containing it."""
+    values = np.expand_dims(values, axis=-1)
+    ranges_np = np.array(ranges, dtype=np.float64)
+    inside = (values >= ranges_np[:, 0]) & (values < ranges_np[:, 1])
+    first_true = inside.argmax(axis=-1)
+    return np.array(index_mapping)[first_true]
+
+
+def non_maximum_suppression(magnitude: np.ndarray, theta_mapping: np.ndarray) -> np.ndarray:
+    """Keeps a pixel only if it is >= both neighbours along its (quantised) gradient direction."""
+    padded = np.pad(magnitude, 1, mode="constant", constant_values=-1)
+
+    c = padded[1:-1, 1:-1]
+    l, r = padded[1:-1, :-2], padded[1:-1, 2:]
+    u, d = padded[:-2, 1:-1], padded[2:, 1:-1]
+    ul, dr = padded[:-2, :-2], padded[2:, 2:]
+    ur, dl = padded[:-2, 2:], padded[2:, :-2]
+
+    conds = [theta_mapping == 0, theta_mapping == 45, theta_mapping == 90, theta_mapping == 135]
+    prev = np.select(conds, [l, ul, u, ur], default=np.inf)
+    nxt = np.select(conds, [r, dr, d, dl], default=np.inf)
+
+    keep = (c >= prev) & (c >= nxt)
+    return np.where(keep, magnitude, 0)
+
+
+def hysteresis(matrix: np.ndarray, weak: int, strong: int) -> np.ndarray:
+    """
+    Promotes weak pixels that are 8-connected (directly or through other weak
+    pixels) to a strong pixel. Returns a uint8 image with values 0 / 255.
+    """
+    work = np.pad(matrix, 1, mode="constant", constant_values=-1)
+    queue = deque(map(tuple, np.argwhere(work == strong)))  # seeds: only strong pixels
+    offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+    while queue:
+        i, j = queue.popleft()
+        for di, dj in offsets:
+            ni, nj = i + di, j + dj
+            if work[ni, nj] == weak:
+                work[ni, nj] = strong
+                queue.append((ni, nj))
+
+    return np.where(work[1:-1, 1:-1] == strong, 255, 0).astype(np.uint8)
+
+
+def manual_canny(
+    image: np.ndarray,
+    low_threshold: float,
+    high_threshold: float,
+    sigma: float = 1.0,
+    gaussian_kernel_size: int = 3,
+) -> np.ndarray:
+    """Canny edge detector built from scratch: blur -> Sobel -> NMS -> double threshold -> hysteresis."""
+    if low_threshold < 0 or high_threshold < 0:
+        raise ValueError("Canny thresholds must not be negative.")
+    if low_threshold >= high_threshold:
+        raise ValueError("Canny: the lower threshold must be smaller than the upper threshold.")
+
+    gray = ensure_gray_from_bgr(image)
+    blurred = gaussian_filter(gray, gaussian_kernel_size, sigma)
+    magnitude, _, _, theta = sobel_edge_detection(blurred, process=False)
+
+    # Gradient angle folded into [0, 180) and quantised to 0 / 45 / 90 / 135 degrees
+    theta_deg = (np.degrees(theta) + 180) % 180
+    angle_ranges = [(0, 22.5), (22.5, 67.5), (67.5, 112.5), (112.5, 157.5), (157.5, 180)]
+    theta_mapping = mapping(theta_deg, angle_ranges, [0, 45, 90, 135, 0])
+
+    thin = non_maximum_suppression(magnitude, theta_mapping)
+
+    # Double threshold: below low -> 0, between -> weak (75), at/above high -> strong (255)
+    levels = mapping(
+        thin,
+        [(-np.inf, low_threshold), (low_threshold, high_threshold), (high_threshold, np.inf)],
+        [0, 75, 255],
+    )
+    return hysteresis(levels, weak=75, strong=255)
 
 
 # ==========================================

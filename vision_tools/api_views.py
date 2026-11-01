@@ -64,6 +64,11 @@ OPERATIONS = [
     {"id": "roberts", "label": "Roberts Cross Edge Detection", "group": "Edge Detection"},
     {"id": "auto_canny", "label": "Canny Edge Detection", "group": "Edge Detection"},
     {
+        "id": "manual_canny",
+        "label": "Canny Edge Detection (Manual)",
+        "group": "Edge Detection",
+    },
+    {
         "id": "lowpass",
         "label": "Ideal Low-Pass Filter (FFT)",
         "group": "Frequency Domain & Hybrid",
