@@ -399,6 +399,68 @@ def manual_canny(
 
 
 # ==========================================
+# 4b. Hough Transform (Line Detection)
+# ==========================================
+
+def hough_transform(edges: np.ndarray, threshold: int, peak_window: int = 9, max_lines: int = 200):
+    """
+    Line Hough transform on a binary edge map, using rho = y*cos(t) - x*sin(t).
+    Returns (rhos, thetas_in_radians, votes), strongest lines first. Only local peaks of the
+    accumulator above `threshold` are kept, so one real line yields one detected line.
+    """
+    ys, xs = np.nonzero(edges)
+    thetas = np.deg2rad(np.arange(0, 180, 1))
+    height, width = edges.shape[:2]
+    rho_max = int(np.ceil(np.hypot(height, width)))
+    n_rho = 2 * rho_max + 1
+
+    accumulator = np.zeros((n_rho, len(thetas)), dtype=np.uint32)
+    if ys.size == 0:
+        return np.array([]), np.array([]), np.array([])
+
+    ys = ys.astype(np.float32)
+    xs = xs.astype(np.float32)
+    # One bincount per angle keeps memory at O(N) instead of O(N * 180).
+    for t, theta in enumerate(thetas):
+        rho = ys * np.cos(theta) - xs * np.sin(theta)
+        idx = np.round(rho).astype(np.int64) + rho_max
+        accumulator[:, t] = np.bincount(idx, minlength=n_rho)
+
+    # Non-maximum suppression in (rho, theta) space
+    half = peak_window // 2
+    # theta wraps at 180 deg with rho -> -rho, so pad the theta axis with the flipped opposite edge
+    wrapped = np.hstack([accumulator[::-1, -half:], accumulator, accumulator[::-1, :half]])
+    padded = np.pad(wrapped, ((half, half), (0, 0)), mode="constant")
+    local_max = sliding_window_view(padded, (peak_window, peak_window)).max(axis=(-2, -1))
+    peaks = (accumulator > threshold) & (accumulator == local_max)
+
+    r_idx, t_idx = np.nonzero(peaks)
+    votes = accumulator[r_idx, t_idx]
+    order = np.argsort(-votes)[:max_lines]
+    r_idx, t_idx, votes = r_idx[order], t_idx[order], votes[order]
+    return (r_idx - rho_max).astype(np.float64), thetas[t_idx], votes
+
+
+def draw_hough_lines(image: np.ndarray, rhos, thetas, color=(0, 0, 255), thickness: int = 2) -> np.ndarray:
+    """Draws infinite (image-clipped) lines given in (rho, theta) form on a BGR copy of `image`."""
+    result = np.array(image, dtype=np.uint8, order="C", copy=True)
+    if result.ndim == 2:
+        result = cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+
+    height, width = result.shape[:2]
+    length = int(np.hypot(height, width))
+
+    for rho, theta in zip(rhos, thetas):
+        c, s = np.cos(theta), np.sin(theta)
+        x0, y0 = -rho * s, rho * c
+        p1 = (int(x0 + length * c), int(y0 + length * s))
+        p2 = (int(x0 - length * c), int(y0 - length * s))
+        cv2.line(result, p1, p2, color, thickness)
+
+    return result
+
+
+# ==========================================
 # 5. Thresholding (Global, Iterative, Local)
 # ==========================================
 

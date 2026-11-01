@@ -88,6 +88,8 @@ def process_image_upload(request_files, request_post):
     local_c = float(request_post.get("local_c") or 5.0)
     canny_low = float(request_post.get("canny_low") or 50)
     canny_high = float(request_post.get("canny_high") or 150)
+    hough_thresh = int(float(request_post.get("hough_thresh") or 100))
+    draw_on_image = request_post.get("draw_on_image") in ("on", "true", "1", True)
 
     if kernel_size < 3:
         kernel_size = 3
@@ -162,6 +164,24 @@ def process_image_upload(request_files, request_post):
             context["info"] = (
                 f"Manual Canny — Low: {canny_low:g}, High: {canny_high:g} "
                 f"(Gaussian: {kernel_size}×{kernel_size}, σ = {sigma:g})"
+            )
+
+        elif operation == "hough_lines":
+            edges = utils.manual_canny(
+                img1_work,
+                low_threshold=canny_low,
+                high_threshold=canny_high,
+                sigma=sigma,
+                gaussian_kernel_size=kernel_size,
+            )
+            rhos, thetas, votes = utils.hough_transform(edges, threshold=hough_thresh)
+            # Draw on the original (colour) upload, or on the edge map when unchecked
+            canvas = img1 if draw_on_image else edges
+            result_img = utils.draw_hough_lines(canvas, rhos, thetas)
+            context["info"] = (
+                f"Hough lines — {len(rhos)} detected (vote threshold {hough_thresh}, "
+                f"{int((edges > 0).sum())} edge pixels) drawn on "
+                f"{'the original image' if draw_on_image else 'the edge map'}"
             )
 
         elif operation in ("lowpass", "highpass"):

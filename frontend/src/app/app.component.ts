@@ -20,6 +20,7 @@ const AUTO_GRAY_OPS = new Set([
   'equalize',
   'auto_canny',
   'manual_canny',
+  'hough_lines',
 ]);
 
 const MAX_RUNS = 30;
@@ -49,6 +50,8 @@ export class AppComponent implements OnInit {
   params: ProcessParams = {
     filter_type: 'sobel',
     convert_gray: false,
+    hough_thresh: 100,
+    draw_on_image: true,
     kernel_size: 3,
     sigma: 1.0,
     canny_low: 50,
@@ -115,13 +118,16 @@ export class AppComponent implements OnInit {
     return this.op === 'hybrid';
   }
   get showKernel(): boolean {
-    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny'].includes(this.op);
+    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny', 'hough_lines'].includes(this.op);
   }
   get showSigma(): boolean {
-    return this.op === 'gaussian' || this.op === 'manual_canny';
+    return this.op === 'gaussian' || this.op === 'manual_canny' || this.op === 'hough_lines';
   }
   get showCannyThresh(): boolean {
-    return this.op === 'auto_canny' || this.op === 'manual_canny';
+    return this.op === 'auto_canny' || this.op === 'manual_canny' || this.op === 'hough_lines';
+  }
+  get showHough(): boolean {
+    return this.op === 'hough_lines';
   }
   get showThresh(): boolean {
     return this.op === 'threshold';
@@ -154,7 +160,7 @@ export class AppComponent implements OnInit {
     return (
       this.showKernel || this.showSigma || this.showCannyThresh || this.showThresh ||
       this.showIterDiff || this.showLocal || this.showNoise || this.showSaltPepper ||
-      this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
+      this.showHough || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
       this.showGrayToggle
     );
   }
@@ -291,14 +297,21 @@ export class AppComponent implements OnInit {
     if (this.params.convert_gray) {
       form.append('convert_gray', 'on');
     }
+    if (this.showHough && this.params.draw_on_image) {
+      form.append('draw_on_image', 'on');
+    }
 
     const numericKeys: (keyof ProcessParams)[] = [
       'kernel_size', 'sigma', 'canny_low', 'canny_high', 'thresh_val', 'iter_diff', 'local_win', 'local_c',
       'noise_mean', 'noise_sigma', 'sp_amount', 'sp_salt_ratio', 'uniform_low', 'uniform_high',
-      'cutoff_low', 'cutoff_high', 'alpha', 'beta',
+      'cutoff_low', 'cutoff_high', 'alpha', 'beta', 'hough_thresh',
     ];
     for (const key of numericKeys) {
-      form.append(key, String(this.params[key]));
+      const value = this.params[key];
+      // An emptied number box is null: skip it so the backend falls back to its default.
+      if (value !== null && value !== undefined && String(value) !== '') {
+        form.append(key, String(value));
+      }
     }
 
     this.loading = true;

@@ -17,6 +17,8 @@ export interface ProcessParams {
   convert_gray: boolean;
   kernel_size: number;
   sigma: number;
+  hough_thresh: number;
+  draw_on_image:boolean;
   canny_low: number;
   canny_high: number;
   thresh_val: number;
