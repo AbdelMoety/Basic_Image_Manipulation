@@ -79,9 +79,33 @@
             <span class="lbl">Hough threshold (min votes)</span>
             <input type="number" [(ngModel)]="params.hough_thresh" min="1" step="1" />
           </label>
+        }
+        @if (showCircles) {
+          <label class="row half">
+            <span class="lbl">Min radius (px)</span>
+            <input type="number" [(ngModel)]="params.circle_r_min" min="1" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max radius (px)</span>
+            <input type="number" [(ngModel)]="params.circle_r_max" min="2" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Min support (0–1)</span>
+            <input type="number" [(ngModel)]="params.circle_ratio" min="0.05" max="1" step="0.05" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Min distance (px)</span>
+            <input type="number" [(ngModel)]="params.circle_min_dist" min="1" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max circles</span>
+            <input type="number" [(ngModel)]="params.circle_max" min="1" max="200" step="1" />
+          </label>
+        }
+        @if (showDrawOption) {
           <label class="check">
             <input type="checkbox" [(ngModel)]="params.draw_on_image" name="draw_on_image" />
-            Draw detected lines on the original image
+            Draw detected {{ showCircles ? 'circles' : 'lines' }} on the original image
           </label>
         }
         @if (showThresh) {

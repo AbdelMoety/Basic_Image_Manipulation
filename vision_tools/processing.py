@@ -90,6 +90,11 @@ def process_image_upload(request_files, request_post):
     canny_high = float(request_post.get("canny_high") or 150)
     hough_thresh = int(float(request_post.get("hough_thresh") or 100))
     draw_on_image = request_post.get("draw_on_image") in ("on", "true", "1", True)
+    circle_r_min = int(float(request_post.get("circle_r_min") or 20))
+    circle_r_max = int(float(request_post.get("circle_r_max") or 100))
+    circle_ratio = float(request_post.get("circle_ratio") or 0.4)
+    circle_min_dist = float(request_post.get("circle_min_dist") or 15)
+    circle_max = int(float(request_post.get("circle_max") or 20))
 
     if kernel_size < 3:
         kernel_size = 3
@@ -182,6 +187,33 @@ def process_image_upload(request_files, request_post):
                 f"Hough lines — {len(rhos)} detected (vote threshold {hough_thresh}, "
                 f"{int((edges > 0).sum())} edge pixels) drawn on "
                 f"{'the original image' if draw_on_image else 'the edge map'}"
+            )
+
+        elif operation == "hough_circles":
+            if circle_r_min < 1 or circle_r_max <= circle_r_min:
+                raise ValueError("Circle radii: need 1 <= min radius < max radius.")
+            h_img, w_img = img1_work.shape[:2]
+            r_step = utils.circle_radius_step(h_img, w_img, circle_r_min, circle_r_max)
+            circles, edges = utils.hough_circles(
+                img1_work,
+                r_min=circle_r_min,
+                r_max=circle_r_max,
+                low_threshold=canny_low,
+                high_threshold=canny_high,
+                sigma=sigma,
+                gaussian_kernel_size=kernel_size,
+                r_step=r_step,
+                threshold_ratio=circle_ratio,
+                min_dist=circle_min_dist,
+                max_circles=circle_max,
+            )
+            canvas = img1 if draw_on_image else edges
+            result_img = utils.draw_circles(canvas, circles)
+            context["info"] = (
+                f"Hough circles — {len(circles)} detected (radius {circle_r_min}–{circle_r_max}px, "
+                f"step {r_step}, min support {circle_ratio * 100:.0f}% of circumference) drawn on "
+                f"{'the original image' if draw_on_image else 'the edge map'}"
+                + (" — radius step raised automatically to fit memory" if r_step > 1 else "")
             )
 
         elif operation in ("lowpass", "highpass"):

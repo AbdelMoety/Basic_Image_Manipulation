@@ -19,6 +19,11 @@ export interface ProcessParams {
   sigma: number;
   hough_thresh: number;
   draw_on_image:boolean;
+  circle_r_min: number;
+  circle_r_max: number;
+  circle_ratio: number;
+  circle_min_dist: number;
+  circle_max: number;
   canny_low: number;
   canny_high: number;
   thresh_val: number;

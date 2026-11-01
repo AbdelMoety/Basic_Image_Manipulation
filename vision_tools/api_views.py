@@ -74,6 +74,11 @@ OPERATIONS = [
         "group": "Edge Detection",
     },
     {
+        "id": "hough_circles",
+        "label": "Hough Circle Detection (Manual)",
+        "group": "Edge Detection",
+    },
+    {
         "id": "lowpass",
         "label": "Ideal Low-Pass Filter (FFT)",
         "group": "Frequency Domain & Hybrid",

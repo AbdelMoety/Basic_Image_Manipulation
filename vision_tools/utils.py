@@ -461,6 +461,127 @@ def draw_hough_lines(image: np.ndarray, rhos, thetas, color=(0, 0, 255), thickne
 
 
 # ==========================================
+# 4c. Hough Transform (Circle Detection)
+# ==========================================
+
+# Max accumulator size (radii x H x W voxels, float32). Keeps peak memory around 400 MB.
+MAX_CIRCLE_VOXELS = 25_000_000
+
+
+def circle_radius_step(height: int, width: int, r_min: int, r_max: int) -> int:
+    """Smallest radius step that keeps the 3D accumulator under MAX_CIRCLE_VOXELS."""
+    max_radii = max(1, MAX_CIRCLE_VOXELS // (height * width))
+    return max(1, int(np.ceil((r_max - r_min + 1) / max_radii)))
+
+
+def _local_maxima_3d(volume: np.ndarray) -> np.ndarray:
+    """True where a voxel is >= all of its 26 neighbours (shift-and-compare, no pixel loops)."""
+    padded = np.pad(volume, 1, mode="constant", constant_values=-np.inf)
+    nr, h, w = volume.shape
+    is_max = np.ones(volume.shape, dtype=bool)
+    for dr in range(3):
+        for dy in range(3):
+            for dx in range(3):
+                if (dr, dy, dx) == (1, 1, 1):
+                    continue
+                is_max &= volume >= padded[dr:dr + nr, dy:dy + h, dx:dx + w]
+    return is_max
+
+
+def hough_circle_transform(edges, theta, r_min, r_max, r_step=1, vote_window=3):
+    """
+    Gradient-based Hough Circle Transform.
+    Each edge pixel votes ONLY along its gradient direction (both ways, so bright-on-dark
+    and dark-on-bright circles both work) instead of voting on a full circle -> 1 vote
+    per radius per direction instead of ~2*pi*r votes.
+
+    edges : binary edge map (output of manual_canny)
+    theta : gradient angle map in radians (output of sobel_edge_detection)
+    Returns accumulator of shape (num_radii, H, W) and the radii array.
+    """
+    h, w = edges.shape
+    ys, xs = np.where(edges > 0)
+    cos_t = np.cos(theta[ys, xs])
+    sin_t = np.sin(theta[ys, xs])
+
+    radii = np.arange(r_min, r_max + 1, r_step)
+    box = np.ones(vote_window, dtype=np.float32)          # sums votes in a small window -> tolerates +-1px jitter
+    accumulator = np.zeros((len(radii), h, w), dtype=np.float32)
+
+    for k, r in enumerate(radii):
+        votes = np.zeros(h * w, dtype=np.float32)
+        for sign in (1, -1):
+            cx = np.rint(xs + sign * r * cos_t).astype(int)
+            cy = np.rint(ys + sign * r * sin_t).astype(int)
+            inside = (cx >= 0) & (cx < w) & (cy >= 0) & (cy < h)
+            votes += np.bincount(cy[inside] * w + cx[inside], minlength=h * w)
+        # separable convolution (clip=False keeps real vote counts)
+        accumulator[k] = convolve_separable(votes.reshape(h, w), box, box, clip=False)
+
+    return accumulator, radii
+
+
+def find_circles(accumulator, radii, threshold_ratio=0.4, min_dist=15, max_circles=20, max_candidates=5000):
+    """
+    Picks peaks from the 3D accumulator.
+    threshold_ratio : minimum fraction of the circle's circumference (2*pi*r) that must be supported by edge pixels.
+    min_dist        : circles closer than this in (cx, cy, r) space are treated as duplicates.
+    Returns an array of rows (cx, cy, r, score), best first.
+    """
+    score = accumulator / (2 * np.pi * radii)[:, None, None]
+    candidates = (score >= threshold_ratio) & _local_maxima_3d(score)
+    r_idx, ys, xs = np.nonzero(candidates)
+
+    order = np.argsort(-score[r_idx, ys, xs])[:max_candidates]
+    r_idx, ys, xs = r_idx[order], ys[order], xs[order]
+
+    accepted = np.empty((0, 3), dtype=np.float32)
+    circles = []
+    for ri, y, x in zip(r_idx, ys, xs):
+        point = np.array([x, y, radii[ri]], dtype=np.float32)
+        if len(accepted) and np.min(np.linalg.norm(accepted - point, axis=1)) < min_dist:
+            continue
+        accepted = np.vstack([accepted, point])
+        circles.append((x, y, radii[ri], score[ri, y, x]))
+        if len(circles) >= max_circles:
+            break
+    return np.array(circles, dtype=np.float32).reshape(-1, 4)
+
+
+def hough_circles(image, r_min, r_max, low_threshold=50, high_threshold=150, sigma=1.4,
+                  gaussian_kernel_size=5, r_step=1, threshold_ratio=0.4, min_dist=15, max_circles=20):
+    """Full pipeline built only from this module's own functions. `image` is BGR or grayscale."""
+    gray = ensure_gray_from_bgr(image)
+    edges = manual_canny(image, low_threshold, high_threshold, sigma, gaussian_kernel_size)
+
+    # manual_canny doesn't return the gradient angles, so recompute them (cheap, vectorized)
+    smoothed = gaussian_filter(gray, gaussian_kernel_size, sigma)
+    _, _, _, theta = sobel_edge_detection(smoothed, process=False)
+
+    accumulator, radii = hough_circle_transform(edges, theta, r_min, r_max, r_step)
+    circles = find_circles(accumulator, radii, threshold_ratio, min_dist, max_circles)
+    return circles, edges
+
+
+def draw_circles(image, circles, color=(0, 0, 255), thickness=2, center_color=(0, 255, 0)):
+    """Draws circles with pure NumPy (no cv2.circle). Colours are BGR; returns a 3-channel image."""
+    out = np.array(image, dtype=np.uint8, copy=True)
+    if out.ndim == 2:
+        out = np.stack([out] * 3, axis=-1)
+    h, w = out.shape[:2]
+
+    for cx, cy, r, _ in circles:
+        x0, x1 = max(int(cx - r - thickness - 1), 0), min(int(cx + r + thickness + 2), w)
+        y0, y1 = max(int(cy - r - thickness - 1), 0), min(int(cy + r + thickness + 2), h)
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        dist = np.hypot(xx - cx, yy - cy)
+        region = out[y0:y1, x0:x1]                       # view into `out`
+        region[np.abs(dist - r) <= thickness / 2] = color
+        region[dist <= 2] = center_color
+    return out
+
+
+# ==========================================
 # 5. Thresholding (Global, Iterative, Local)
 # ==========================================
 
