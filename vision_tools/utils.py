@@ -582,6 +582,214 @@ def draw_circles(image, circles, color=(0, 0, 255), thickness=2, center_color=(0
 
 
 # ==========================================
+# 4d. Hough Transform (Ellipse Detection)
+# ==========================================
+
+def _symmetric_pairs(xs, ys, theta, d_min, d_max, angle_tol_deg=12):
+    """
+    Two edge points that are symmetric about an ellipse centre have PARALLEL tangents, i.e.
+    gradients pointing in OPPOSITE directions. Edge points are bucketed by gradient angle, so only
+    points in opposite buckets are compared (instead of all N^2 pairs).
+    Returns index arrays (I, J) of the matching pairs.
+    """
+    n_bins = 2 * int(np.ceil(180 / angle_tol_deg))            # bucket width <= tolerance, always even
+    ang = np.mod(theta, 2 * np.pi)
+    bins = np.minimum((ang / (2 * np.pi) * n_bins).astype(int), n_bins - 1)
+    members = [np.nonzero(bins == b)[0] for b in range(n_bins)]
+    tol = np.deg2rad(angle_tol_deg)
+
+    I, J = [], []
+    for b in range(n_bins):
+        P = members[b]
+        partner = np.concatenate([members[(b + n_bins // 2 + s) % n_bins] for s in (-1, 0, 1)])
+        if len(P) == 0 or len(partner) == 0:
+            continue
+        pi, qi = np.meshgrid(P, partner, indexing="ij")
+        pi, qi = pi.ravel(), qi.ravel()
+        keep = pi < qi                                         # every pair is seen from both sides; keep it once
+        pi, qi = pi[keep], qi[keep]
+        diff = np.abs(np.angle(np.exp(1j * (ang[pi] - ang[qi] - np.pi))))
+        dist = np.hypot(xs[pi] - xs[qi], ys[pi] - ys[qi])
+        ok = (diff <= tol) & (dist >= d_min) & (dist <= d_max)
+        I.append(pi[ok]); J.append(qi[ok])
+
+    if not I:
+        return np.empty(0, int), np.empty(0, int)
+    return np.concatenate(I), np.concatenate(J)
+
+
+def _conic_to_axes(A, B, C):
+    """Centered conic A x^2 + B xy + C y^2 = 1  ->  (semi-major a, semi-minor b, major-axis angle phi)."""
+    vals, vecs = np.linalg.eigh(np.array([[A, B / 2], [B / 2, C]]))      # ascending eigenvalues
+    a, b = 1 / np.sqrt(vals[0]), 1 / np.sqrt(vals[1])
+    phi = np.arctan2(vecs[1, 0], vecs[0, 0])
+    return a, b, phi
+
+
+def _is_ellipse(p):
+    return (p[0] > 0) and (p[2] > 0) and (4 * p[0] * p[2] - p[1] ** 2 > 0)
+
+
+def _fit_centered_ellipse(qx, qy, n_iter=500, inlier_tol=1.5, rng=None):
+    """
+    RANSAC fit of A x^2 + B xy + C y^2 = 1 to points given RELATIVE to the ellipse centre.
+    With the centre known only 3 unknowns remain, so 3 points define a candidate (batched, no Python loop).
+    """
+    rng = np.random.default_rng(0) if rng is None else rng
+    m = len(qx)
+    if m < 6:
+        return None
+    X = np.stack([qx ** 2, qx * qy, qy ** 2], axis=1)                    # (m, 3)
+
+    def sampson(p):                                                     # approx. distance of every point to the conic
+        F = X @ p
+        gx = 2 * p[0] * qx + p[1] * qy
+        gy = p[1] * qx + 2 * p[2] * qy
+        return np.abs(F - 1) / (np.hypot(gx, gy) + 1e-9)
+
+    M = X[rng.integers(0, m, size=(n_iter, 3))]                          # (n_iter, 3, 3)
+    M = M[np.abs(np.linalg.det(M)) > 1e-6]
+    if len(M) == 0:
+        return None
+    P = np.linalg.solve(M, np.ones((len(M), 3, 1)))[..., 0]              # (k, 3)
+    P = P[(P[:, 0] > 0) & (P[:, 2] > 0) & (4 * P[:, 0] * P[:, 2] - P[:, 1] ** 2 > 0)]
+    if len(P) == 0:
+        return None
+
+    F = P @ X.T                                                          # (k, m)
+    gx = 2 * P[:, [0]] * qx + P[:, [1]] * qy
+    gy = P[:, [1]] * qx + 2 * P[:, [2]] * qy
+    inliers = (np.abs(F - 1) / (np.hypot(gx, gy) + 1e-9) < inlier_tol).sum(axis=1)
+    best = P[np.argmax(inliers)]
+
+    for _ in range(3):                                                   # refit on inliers (least squares)
+        inl = sampson(best) < inlier_tol
+        if inl.sum() < 6:
+            break
+        refit = np.linalg.lstsq(X[inl], np.ones(inl.sum()), rcond=None)[0]
+        if not _is_ellipse(refit):
+            break
+        best = refit
+    return best if _is_ellipse(best) else None
+
+
+def _ellipse_support(edges_dilated, cx, cy, a, b, phi):
+    """Fraction of the ellipse outline that lies on (dilated) edge pixels - the final 'is this real?' score."""
+    h, w = edges_dilated.shape
+    perimeter = np.pi * (3 * (a + b) - np.sqrt((3 * a + b) * (a + 3 * b)))   # Ramanujan
+    t = np.linspace(0, 2 * np.pi, max(int(perimeter), 16), endpoint=False)
+    x = np.rint(cx + a * np.cos(t) * np.cos(phi) - b * np.sin(t) * np.sin(phi)).astype(int)
+    y = np.rint(cy + a * np.cos(t) * np.sin(phi) + b * np.sin(t) * np.cos(phi)).astype(int)
+    inside = (x >= 0) & (x < w) & (y >= 0) & (y < h)
+    hit = np.zeros(len(t), dtype=bool)
+    hit[inside] = edges_dilated[y[inside], x[inside]] > 0
+    return hit.mean()
+
+
+def hough_ellipse_transform(edges, theta, a_max, b_min=5, angle_tol_deg=12, vote_window=5, max_edge_points=2500, seed=0):
+    """
+    Step 1 of ellipse detection: find CENTRE candidates.
+    Every pair of 'symmetric' edge points votes for its midpoint in a 2D accumulator.
+    Returns (centre accumulator, xs, ys, pair indices I, J, pair midpoints mx, my).
+    """
+    h, w = edges.shape
+    ys, xs = np.where(edges > 0)
+    if len(xs) > max_edge_points:                                       # keep the pair count manageable
+        keep = np.random.default_rng(seed).choice(len(xs), max_edge_points, replace=False)
+        ys, xs = ys[keep], xs[keep]
+    th = theta[ys, xs]
+
+    I, J = _symmetric_pairs(xs, ys, th, d_min=2 * b_min, d_max=2 * a_max, angle_tol_deg=angle_tol_deg)
+    mx, my = (xs[I] + xs[J]) / 2.0, (ys[I] + ys[J]) / 2.0
+
+    votes = np.bincount(np.rint(my).astype(int) * w + np.rint(mx).astype(int), minlength=h * w).astype(np.float32)
+    box = np.ones(vote_window, dtype=np.float32)
+    acc = convolve_separable(votes.reshape(h, w), box, box, clip=False)
+    return acc, xs, ys, I, J, mx, my
+
+
+def find_ellipses(edges, acc, xs, ys, I, J, mx, my, min_votes=15, min_center_dist=10, max_candidates=30,
+                  center_tol=3.0, inlier_tol=1.5, n_iter=500, a_min=8, a_max=100, b_min=5,
+                  min_support=0.6, max_ellipses=10):
+    """
+    Step 2: for each centre candidate, collect the points that voted for it, RANSAC-fit (a, b, phi),
+    then keep the ellipse only if enough of its outline is really covered by edge pixels.
+    Returns rows (cx, cy, a, b, phi_radians, support), best first.
+    """
+    # --- centre peaks (greedy non-maximum suppression) ---
+    peaks = (acc >= min_votes) & _local_maxima_3d(acc[None])[0]
+    py, px = np.nonzero(peaks)
+    order = np.argsort(-acc[py, px])
+    centers = []
+    for y, x in zip(py[order], px[order]):
+        if all(np.hypot(x - cx, y - cy) >= min_center_dist for cx, cy in centers):
+            centers.append((x, y))
+        if len(centers) >= max_candidates:
+            break
+
+    box3 = np.ones(3, dtype=np.float32)
+    edges_dilated = convolve_separable(edges.astype(np.float32), box3, box3, clip=False)
+    rng = np.random.default_rng(0)
+
+    results = []
+    for cx0, cy0 in centers:
+        sel = (np.abs(mx - cx0) <= center_tol) & (np.abs(my - cy0) <= center_tol)
+        if sel.sum() < 3:
+            continue
+        cx, cy = np.median(mx[sel]), np.median(my[sel])                  # refine the centre with sub-pixel midpoints
+        pts = np.unique(np.concatenate([I[sel], J[sel]]))
+        p = _fit_centered_ellipse(xs[pts] - cx, ys[pts] - cy, n_iter, inlier_tol, rng)
+        if p is None:
+            continue
+        a, b, phi = _conic_to_axes(*p)
+        if not (a_min <= a <= a_max and b >= b_min):
+            continue
+        support = _ellipse_support(edges_dilated, cx, cy, a, b, phi)
+        if support >= min_support:
+            results.append((cx, cy, a, b, phi, support))
+
+    results.sort(key=lambda r: -r[5])
+    return np.array(results[:max_ellipses], dtype=np.float32).reshape(-1, 6)
+
+
+def hough_ellipses(image, a_min, a_max, b_min=5, low_threshold=50, high_threshold=150, sigma=1.4,
+                   gaussian_kernel_size=5, angle_tol_deg=12, min_votes=15, min_support=0.6,
+                   min_center_dist=10, max_ellipses=10):
+    """Full pipeline built only from this module's own functions. `image` is BGR or grayscale."""
+    gray = ensure_gray_from_bgr(image)
+    edges = manual_canny(image, low_threshold, high_threshold, sigma, gaussian_kernel_size)
+    smoothed = gaussian_filter(gray, gaussian_kernel_size, sigma)
+    _, _, _, theta = sobel_edge_detection(smoothed, process=False)
+
+    acc, xs, ys, I, J, mx, my = hough_ellipse_transform(edges, theta, a_max, b_min, angle_tol_deg)
+    ellipses = find_ellipses(edges, acc, xs, ys, I, J, mx, my, min_votes=min_votes, min_center_dist=min_center_dist,
+                             a_min=a_min, a_max=a_max, b_min=b_min, min_support=min_support, max_ellipses=max_ellipses)
+    return ellipses, edges
+
+
+def draw_ellipses(image, ellipses, color=(0, 0, 255), thickness=2, center_color=(0, 255, 0)):
+    """Draws ellipses with pure NumPy (no cv2.ellipse). Colours are BGR; returns a 3-channel image."""
+    out = np.array(image, dtype=np.uint8, copy=True)
+    if out.ndim == 2:
+        out = np.stack([out] * 3, axis=-1)
+    h, w = out.shape[:2]
+
+    for cx, cy, a, b, phi, _ in ellipses:
+        r = a + thickness + 2
+        x0, x1 = max(int(cx - r), 0), min(int(cx + r) + 1, w)
+        y0, y1 = max(int(cy - r), 0), min(int(cy + r) + 1, h)
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        u = (xx - cx) * np.cos(phi) + (yy - cy) * np.sin(phi)              # coordinates in the ellipse's own frame
+        v = -(xx - cx) * np.sin(phi) + (yy - cy) * np.cos(phi)
+        g2 = (u / a) ** 2 + (v / b) ** 2
+        dist = np.abs(g2 - 1) / (2 * np.hypot(u / a ** 2, v / b ** 2) + 1e-9)   # ~ pixel distance to the outline
+        region = out[y0:y1, x0:x1]
+        region[dist <= thickness / 2] = color
+        region[np.hypot(xx - cx, yy - cy) <= 2] = center_color
+    return out
+
+
+# ==========================================
 # 5. Thresholding (Global, Iterative, Local)
 # ==========================================
 

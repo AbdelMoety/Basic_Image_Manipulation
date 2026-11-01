@@ -95,6 +95,12 @@ def process_image_upload(request_files, request_post):
     circle_ratio = float(request_post.get("circle_ratio") or 0.4)
     circle_min_dist = float(request_post.get("circle_min_dist") or 15)
     circle_max = int(float(request_post.get("circle_max") or 20))
+    ellipse_a_min = float(request_post.get("ellipse_a_min") or 15)
+    ellipse_a_max = float(request_post.get("ellipse_a_max") or 100)
+    ellipse_b_min = float(request_post.get("ellipse_b_min") or 8)
+    ellipse_votes = float(request_post.get("ellipse_votes") or 15)
+    ellipse_support = float(request_post.get("ellipse_support") or 0.75)
+    ellipse_max = int(float(request_post.get("ellipse_max") or 10))
 
     if kernel_size < 3:
         kernel_size = 3
@@ -214,6 +220,32 @@ def process_image_upload(request_files, request_post):
                 f"step {r_step}, min support {circle_ratio * 100:.0f}% of circumference) drawn on "
                 f"{'the original image' if draw_on_image else 'the edge map'}"
                 + (" — radius step raised automatically to fit memory" if r_step > 1 else "")
+            )
+
+        elif operation == "hough_ellipses":
+            if ellipse_b_min < 1 or ellipse_a_min < ellipse_b_min or ellipse_a_max <= ellipse_a_min:
+                raise ValueError(
+                    "Ellipse axes: need 1 <= min minor axis <= min major axis < max major axis."
+                )
+            ellipses, edges = utils.hough_ellipses(
+                img1_work,
+                a_min=ellipse_a_min,
+                a_max=ellipse_a_max,
+                b_min=ellipse_b_min,
+                low_threshold=canny_low,
+                high_threshold=canny_high,
+                sigma=sigma,
+                gaussian_kernel_size=kernel_size,
+                min_votes=ellipse_votes,
+                min_support=ellipse_support,
+                max_ellipses=ellipse_max,
+            )
+            canvas = img1 if draw_on_image else edges
+            result_img = utils.draw_ellipses(canvas, ellipses)
+            context["info"] = (
+                f"Hough ellipses — {len(ellipses)} detected (semi-major {ellipse_a_min:g}–{ellipse_a_max:g}px, "
+                f"min semi-minor {ellipse_b_min:g}px, min outline support {ellipse_support * 100:.0f}%) drawn on "
+                f"{'the original image' if draw_on_image else 'the edge map'}"
             )
 
         elif operation in ("lowpass", "highpass"):

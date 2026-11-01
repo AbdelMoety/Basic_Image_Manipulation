@@ -24,6 +24,12 @@ export interface ProcessParams {
   circle_ratio: number;
   circle_min_dist: number;
   circle_max: number;
+  ellipse_a_min: number;
+  ellipse_a_max: number;
+  ellipse_b_min: number;
+  ellipse_votes: number;
+  ellipse_support: number;
+  ellipse_max: number;
   canny_low: number;
   canny_high: number;
   thresh_val: number;

@@ -79,6 +79,11 @@ OPERATIONS = [
         "group": "Edge Detection",
     },
     {
+        "id": "hough_ellipses",
+        "label": "Hough Ellipse Detection (Manual)",
+        "group": "Edge Detection",
+    },
+    {
         "id": "lowpass",
         "label": "Ideal Low-Pass Filter (FFT)",
         "group": "Frequency Domain & Hybrid",

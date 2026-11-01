@@ -22,6 +22,7 @@ const AUTO_GRAY_OPS = new Set([
   'manual_canny',
   'hough_lines',
   'hough_circles',
+  'hough_ellipses',
 ]);
 
 const MAX_RUNS = 30;
@@ -57,6 +58,12 @@ export class AppComponent implements OnInit {
     circle_ratio: 0.4,
     circle_min_dist: 15,
     circle_max: 20,
+    ellipse_a_min: 15,
+    ellipse_a_max: 100,
+    ellipse_b_min: 8,
+    ellipse_votes: 15,
+    ellipse_support: 0.75,
+    ellipse_max: 10,
     draw_on_image: true,
     kernel_size: 3,
     sigma: 1.0,
@@ -124,13 +131,13 @@ export class AppComponent implements OnInit {
     return this.op === 'hybrid';
   }
   get showKernel(): boolean {
-    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny', 'hough_lines', 'hough_circles'].includes(this.op);
+    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny', 'hough_lines', 'hough_circles', 'hough_ellipses'].includes(this.op);
   }
   get showSigma(): boolean {
-    return this.op === 'gaussian' || this.op === 'manual_canny' || this.op === 'hough_lines' || this.op === 'hough_circles';
+    return this.op === 'gaussian' || this.op === 'manual_canny' || this.op === 'hough_lines' || this.op === 'hough_circles' || this.op === 'hough_ellipses';
   }
   get showCannyThresh(): boolean {
-    return this.op === 'auto_canny' || this.op === 'manual_canny' || this.op === 'hough_lines' || this.op === 'hough_circles';
+    return this.op === 'auto_canny' || this.op === 'manual_canny' || this.op === 'hough_lines' || this.op === 'hough_circles' || this.op === 'hough_ellipses';
   }
   get showHough(): boolean {
     return this.op === 'hough_lines';
@@ -138,8 +145,11 @@ export class AppComponent implements OnInit {
   get showCircles(): boolean {
     return this.op === 'hough_circles';
   }
+  get showEllipses(): boolean {
+    return this.op === 'hough_ellipses';
+  }
   get showDrawOption(): boolean {
-    return this.showHough || this.showCircles;
+    return this.showHough || this.showCircles || this.showEllipses;
   }
   get showThresh(): boolean {
     return this.op === 'threshold';
@@ -172,7 +182,7 @@ export class AppComponent implements OnInit {
     return (
       this.showKernel || this.showSigma || this.showCannyThresh || this.showThresh ||
       this.showIterDiff || this.showLocal || this.showNoise || this.showSaltPepper ||
-      this.showHough || this.showCircles || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
+      this.showHough || this.showCircles || this.showEllipses || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
       this.showGrayToggle
     );
   }
@@ -318,6 +328,7 @@ export class AppComponent implements OnInit {
       'noise_mean', 'noise_sigma', 'sp_amount', 'sp_salt_ratio', 'uniform_low', 'uniform_high',
       'cutoff_low', 'cutoff_high', 'alpha', 'beta', 'hough_thresh',
       'circle_r_min', 'circle_r_max', 'circle_ratio', 'circle_min_dist', 'circle_max',
+      'ellipse_a_min', 'ellipse_a_max', 'ellipse_b_min', 'ellipse_votes', 'ellipse_support', 'ellipse_max',
     ];
     for (const key of numericKeys) {
       const value = this.params[key];
