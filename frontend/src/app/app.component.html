@@ -90,6 +90,20 @@
             <input type="number" [(ngModel)]="params.canny_high" min="0" max="1000" step="1" />
           </label>
         }
+        @if (showDetectPicker) {
+          <fieldset class="row detect-picker">
+            <legend class="lbl">Detect on the edges</legend>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="detectLines" name="detect_lines" /> Lines
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="detectCircles" name="detect_circles" /> Circles
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="detectEllipses" name="detect_ellipses" /> Ellipses
+            </label>
+          </fieldset>
+        }
         @if (showHough) {
           <label class="row half">
             <span class="lbl">Hough threshold (min votes)</span>
@@ -183,7 +197,7 @@
         @if (showDrawOption) {
           <label class="check">
             <input type="checkbox" [(ngModel)]="params.draw_on_image" name="draw_on_image" />
-            Draw {{ needsContour ? 'the contour' : 'detected ' + (showEllipses ? 'ellipses' : showCircles ? 'circles' : 'lines') }} on the original image
+            Draw {{ drawLabel }} on the original image
           </label>
         }
         @if (showThresh) {

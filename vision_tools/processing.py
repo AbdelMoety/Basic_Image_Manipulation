@@ -7,6 +7,8 @@ from django.core.files.storage import FileSystemStorage
 import numpy as np
 from . import utils
 
+VALID_DETECTIONS = ("lines", "circles", "ellipses")
+
 
 def _save_uploaded_file(fs: FileSystemStorage, uploaded_file):
     unique_name = f"{uuid.uuid4().hex[:8]}_{uploaded_file.name}"
@@ -173,19 +175,13 @@ def process_image_upload(request_files, request_post):
             )
 
         elif operation == "manual_canny":
-            result_img = utils.manual_canny(
-                img1_work,
-                low_threshold=canny_low,
-                high_threshold=canny_high,
-                sigma=sigma,
-                gaussian_kernel_size=kernel_size,
-            )
-            context["info"] = (
-                f"Manual Canny — Low: {canny_low:g}, High: {canny_high:g} "
-                f"(Gaussian: {kernel_size}×{kernel_size}, σ = {sigma:g})"
-            )
+            # Canny runs ONCE; every selected detector reuses the same edge map.
+            raw_det = request_post.get("detections") or ""
+            detections = [d for d in (s.strip() for s in raw_det.split(",")) if d]
+            unknown = [d for d in detections if d not in VALID_DETECTIONS]
+            if unknown:
+                raise ValueError(f"Unknown detection type(s): {', '.join(unknown)}")
 
-        elif operation == "hough_lines":
             edges = utils.manual_canny(
                 img1_work,
                 low_threshold=canny_low,
@@ -193,68 +189,77 @@ def process_image_upload(request_files, request_post):
                 sigma=sigma,
                 gaussian_kernel_size=kernel_size,
             )
-            rhos, thetas, votes = utils.hough_transform(edges, threshold=hough_thresh)
+            info_parts = [
+                f"Manual Canny — Low: {canny_low:g}, High: {canny_high:g} "
+                f"(Gaussian: {kernel_size}×{kernel_size}, σ = {sigma:g}), "
+                f"{int((edges > 0).sum())} edge pixels"
+            ]
+
             # Draw on the original (colour) upload, or on the edge map when unchecked
-            canvas = img1 if draw_on_image else edges
-            result_img = utils.draw_hough_lines(canvas, rhos, thetas)
-            context["info"] = (
-                f"Hough lines — {len(rhos)} detected (vote threshold {hough_thresh}, "
-                f"{int((edges > 0).sum())} edge pixels) drawn on "
-                f"{'the original image' if draw_on_image else 'the edge map'}"
-            )
+            canvas = img1 if (detections and draw_on_image) else edges
+            result_img = canvas
 
-        elif operation == "hough_circles":
-            if circle_r_min < 1 or circle_r_max <= circle_r_min:
-                raise ValueError("Circle radii: need 1 <= min radius < max radius.")
-            h_img, w_img = img1_work.shape[:2]
-            r_step = utils.circle_radius_step(h_img, w_img, circle_r_min, circle_r_max)
-            circles, edges = utils.hough_circles(
-                img1_work,
-                r_min=circle_r_min,
-                r_max=circle_r_max,
-                low_threshold=canny_low,
-                high_threshold=canny_high,
-                sigma=sigma,
-                gaussian_kernel_size=kernel_size,
-                r_step=r_step,
-                threshold_ratio=circle_ratio,
-                min_dist=circle_min_dist,
-                max_circles=circle_max,
-            )
-            canvas = img1 if draw_on_image else edges
-            result_img = utils.draw_circles(canvas, circles)
-            context["info"] = (
-                f"Hough circles — {len(circles)} detected (radius {circle_r_min}–{circle_r_max}px, "
-                f"step {r_step}, min support {circle_ratio * 100:.0f}% of circumference) drawn on "
-                f"{'the original image' if draw_on_image else 'the edge map'}"
-                + (" — radius step raised automatically to fit memory" if r_step > 1 else "")
-            )
+            if "lines" in detections:
+                rhos, thetas, votes = utils.hough_transform(edges, threshold=hough_thresh)
+                result_img = utils.draw_hough_lines(result_img, rhos, thetas)
+                info_parts.append(f"{len(rhos)} line(s) (vote threshold {hough_thresh})")
 
-        elif operation == "hough_ellipses":
-            if ellipse_b_min < 1 or ellipse_a_min < ellipse_b_min or ellipse_a_max <= ellipse_a_min:
-                raise ValueError(
-                    "Ellipse axes: need 1 <= min minor axis <= min major axis < max major axis."
+            if "circles" in detections:
+                if circle_r_min < 1 or circle_r_max <= circle_r_min:
+                    raise ValueError("Circle radii: need 1 <= min radius < max radius.")
+                h_img, w_img = img1_work.shape[:2]
+                r_step = utils.circle_radius_step(h_img, w_img, circle_r_min, circle_r_max)
+                circles, _ = utils.hough_circles(
+                    img1_work,
+                    r_min=circle_r_min,
+                    r_max=circle_r_max,
+                    low_threshold=canny_low,
+                    high_threshold=canny_high,
+                    sigma=sigma,
+                    gaussian_kernel_size=kernel_size,
+                    r_step=r_step,
+                    threshold_ratio=circle_ratio,
+                    min_dist=circle_min_dist,
+                    max_circles=circle_max,
+                    edges=edges,
                 )
-            ellipses, edges = utils.hough_ellipses(
-                img1_work,
-                a_min=ellipse_a_min,
-                a_max=ellipse_a_max,
-                b_min=ellipse_b_min,
-                low_threshold=canny_low,
-                high_threshold=canny_high,
-                sigma=sigma,
-                gaussian_kernel_size=kernel_size,
-                min_votes=ellipse_votes,
-                min_support=ellipse_support,
-                max_ellipses=ellipse_max,
-            )
-            canvas = img1 if draw_on_image else edges
-            result_img = utils.draw_ellipses(canvas, ellipses)
-            context["info"] = (
-                f"Hough ellipses — {len(ellipses)} detected (semi-major {ellipse_a_min:g}–{ellipse_a_max:g}px, "
-                f"min semi-minor {ellipse_b_min:g}px, min outline support {ellipse_support * 100:.0f}%) drawn on "
-                f"{'the original image' if draw_on_image else 'the edge map'}"
-            )
+                result_img = utils.draw_circles(result_img, circles)
+                info_parts.append(
+                    f"{len(circles)} circle(s) (radius {circle_r_min}–{circle_r_max}px, step {r_step}, "
+                    f"min support {circle_ratio * 100:.0f}%)"
+                    + (" — radius step raised automatically to fit memory" if r_step > 1 else "")
+                )
+
+            if "ellipses" in detections:
+                if ellipse_b_min < 1 or ellipse_a_min < ellipse_b_min or ellipse_a_max <= ellipse_a_min:
+                    raise ValueError(
+                        "Ellipse axes: need 1 <= min minor axis <= min major axis < max major axis."
+                    )
+                ellipses, _ = utils.hough_ellipses(
+                    img1_work,
+                    a_min=ellipse_a_min,
+                    a_max=ellipse_a_max,
+                    b_min=ellipse_b_min,
+                    low_threshold=canny_low,
+                    high_threshold=canny_high,
+                    sigma=sigma,
+                    gaussian_kernel_size=kernel_size,
+                    min_votes=ellipse_votes,
+                    min_support=ellipse_support,
+                    max_ellipses=ellipse_max,
+                    edges=edges,
+                )
+                result_img = utils.draw_ellipses(result_img, ellipses)
+                info_parts.append(
+                    f"{len(ellipses)} ellipse(s) (semi-major {ellipse_a_min:g}–{ellipse_a_max:g}px, "
+                    f"min semi-minor {ellipse_b_min:g}px, min outline support {ellipse_support * 100:.0f}%)"
+                )
+
+            if detections:
+                info_parts.append(
+                    f"drawn on {'the original image' if draw_on_image else 'the edge map'}"
+                )
+            context["info"] = " | ".join(info_parts)
 
         elif operation == "snake":
             raw = request_post.get("snake_contour")

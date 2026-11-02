@@ -555,10 +555,13 @@ def find_circles(accumulator, radii, threshold_ratio=0.4, min_dist=15, max_circl
 
 
 def hough_circles(image, r_min, r_max, low_threshold=50, high_threshold=150, sigma=1.4,
-                  gaussian_kernel_size=5, r_step=1, threshold_ratio=0.4, min_dist=15, max_circles=20):
-    """Full pipeline built only from this module's own functions. `image` is BGR or grayscale."""
+                  gaussian_kernel_size=5, r_step=1, threshold_ratio=0.4, min_dist=15, max_circles=20,
+                  edges=None):
+    """Full pipeline built only from this module's own functions. `image` is BGR or grayscale.
+    Pass `edges` (a manual_canny result) to reuse it instead of running Canny again."""
     gray = ensure_gray_from_bgr(image)
-    edges = manual_canny(image, low_threshold, high_threshold, sigma, gaussian_kernel_size)
+    if edges is None:
+        edges = manual_canny(image, low_threshold, high_threshold, sigma, gaussian_kernel_size)
 
     # manual_canny doesn't return the gradient angles, so recompute them (cheap, vectorized)
     smoothed = gaussian_filter(gray, gaussian_kernel_size, sigma)
@@ -760,10 +763,12 @@ def find_ellipses(edges, acc, xs, ys, I, J, mx, my, min_votes=15, min_center_dis
 
 def hough_ellipses(image, a_min, a_max, b_min=5, low_threshold=50, high_threshold=150, sigma=1.4,
                    gaussian_kernel_size=5, angle_tol_deg=12, min_votes=15, min_support=0.6,
-                   min_center_dist=10, max_ellipses=10):
-    """Full pipeline built only from this module's own functions. `image` is BGR or grayscale."""
+                   min_center_dist=10, max_ellipses=10, edges=None):
+    """Full pipeline built only from this module's own functions. `image` is BGR or grayscale.
+    Pass `edges` (a manual_canny result) to reuse it instead of running Canny again."""
     gray = ensure_gray_from_bgr(image)
-    edges = manual_canny(image, low_threshold, high_threshold, sigma, gaussian_kernel_size)
+    if edges is None:
+        edges = manual_canny(image, low_threshold, high_threshold, sigma, gaussian_kernel_size)
     smoothed = gaussian_filter(gray, gaussian_kernel_size, sigma)
     _, _, _, theta = sobel_edge_detection(smoothed, process=False)
 

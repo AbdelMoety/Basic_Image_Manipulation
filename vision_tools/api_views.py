@@ -65,22 +65,7 @@ OPERATIONS = [
     {"id": "auto_canny", "label": "Canny Edge Detection", "group": "Edge Detection"},
     {
         "id": "manual_canny",
-        "label": "Canny Edge Detection (Manual)",
-        "group": "Edge Detection",
-    },
-    {
-        "id": "hough_lines",
-        "label": "Hough Line Detection (Manual)",
-        "group": "Edge Detection",
-    },
-    {
-        "id": "hough_circles",
-        "label": "Hough Circle Detection (Manual)",
-        "group": "Edge Detection",
-    },
-    {
-        "id": "hough_ellipses",
-        "label": "Hough Ellipse Detection (Manual)",
+        "label": "Canny Edge Detection (Manual) + Hough Shapes",
         "group": "Edge Detection",
     },
     {

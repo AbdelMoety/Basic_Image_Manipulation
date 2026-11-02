@@ -20,9 +20,6 @@ const AUTO_GRAY_OPS = new Set([
   'equalize',
   'auto_canny',
   'manual_canny',
-  'hough_lines',
-  'hough_circles',
-  'hough_ellipses',
   'snake',
   'contour_measure',
 ]);
@@ -94,6 +91,11 @@ export class AppComponent implements OnInit {
     snake_sync: true,
   };
 
+  /** Shapes to detect on the Manual Canny edge map (any combination, or none). */
+  detectLines = false;
+  detectCircles = false;
+  detectEllipses = false;
+
   loading = false;
   furthering = false;
   error: string | null = null;
@@ -150,10 +152,10 @@ export class AppComponent implements OnInit {
     return this.op === 'hybrid';
   }
   get showKernel(): boolean {
-    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny', 'hough_lines', 'hough_circles', 'hough_ellipses'].includes(this.op);
+    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny'].includes(this.op);
   }
   get showSigma(): boolean {
-    return ['gaussian', 'manual_canny', 'hough_lines', 'hough_circles', 'hough_ellipses', 'snake'].includes(this.op);
+    return ['gaussian', 'manual_canny', 'snake'].includes(this.op);
   }
   get showSnake(): boolean {
     return this.op === 'snake';
@@ -166,19 +168,44 @@ export class AppComponent implements OnInit {
     return this.showSnake || this.showMeasure;
   }
   get showCannyThresh(): boolean {
-    return this.op === 'auto_canny' || this.op === 'manual_canny' || this.op === 'hough_lines' || this.op === 'hough_circles' || this.op === 'hough_ellipses';
+    return this.op === 'auto_canny' || this.op === 'manual_canny';
+  }
+  /** The "detect shapes on the edges" picker lives inside Manual Canny. */
+  get showDetectPicker(): boolean {
+    return this.op === 'manual_canny';
+  }
+  get anyDetection(): boolean {
+    return this.detectLines || this.detectCircles || this.detectEllipses;
   }
   get showHough(): boolean {
-    return this.op === 'hough_lines';
+    return this.showDetectPicker && this.detectLines;
   }
   get showCircles(): boolean {
-    return this.op === 'hough_circles';
+    return this.showDetectPicker && this.detectCircles;
   }
   get showEllipses(): boolean {
-    return this.op === 'hough_ellipses';
+    return this.showDetectPicker && this.detectEllipses;
   }
   get showDrawOption(): boolean {
-    return this.showHough || this.showCircles || this.showEllipses || this.needsContour;
+    return (this.showDetectPicker && this.anyDetection) || this.needsContour;
+  }
+  /** Comma-separated list sent to the backend, e.g. "lines,ellipses". */
+  get detectionsParam(): string {
+    const d: string[] = [];
+    if (this.detectLines) d.push('lines');
+    if (this.detectCircles) d.push('circles');
+    if (this.detectEllipses) d.push('ellipses');
+    return d.join(',');
+  }
+  get drawLabel(): string {
+    if (this.needsContour) {
+      return 'the contour';
+    }
+    const names: string[] = [];
+    if (this.detectLines) names.push('lines');
+    if (this.detectCircles) names.push('circles');
+    if (this.detectEllipses) names.push('ellipses');
+    return 'detected ' + names.join(' / ');
   }
   get showThresh(): boolean {
     return this.op === 'threshold';
@@ -418,6 +445,9 @@ export class AppComponent implements OnInit {
     }
     if (this.showDrawOption && this.params.draw_on_image) {
       form.append('draw_on_image', 'on');
+    }
+    if (this.showDetectPicker && this.anyDetection) {
+      form.append('detections', this.detectionsParam);
     }
     if (this.needsContour) {
       form.append('snake_contour', JSON.stringify(this.contour));
