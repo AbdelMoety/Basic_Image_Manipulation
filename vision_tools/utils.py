@@ -285,11 +285,17 @@ def _edge_magnitude(image: np.ndarray, kx: np.ndarray, ky: np.ndarray , process 
     return magnitude , gx , gy , theta
 
 
+_SOBEL_KX = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
+_SOBEL_KY = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32)
+
+def sobel_gradients(image: np.ndarray):
+    """Only (gx, gy), without the magnitude/angle maps (cheaper when those aren't needed)."""
+    return convolve(image, _SOBEL_KX, clip=False), convolve(image, _SOBEL_KY, clip=False)
+
+
 def sobel_edge_detection(image: np.ndarray, process: bool = True):
     """Returns (magnitude, gx, gy, theta). With process=False the magnitude stays float (unclipped)."""
-    kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
-    ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32)
-    return _edge_magnitude(image, kx, ky, process=process)
+    return _edge_magnitude(image, _SOBEL_KX, _SOBEL_KY, process=process)
 
 
 def prewitt_edge_detection(image: np.ndarray) -> np.ndarray:
@@ -903,13 +909,31 @@ def manual_equalize(image: np.ndarray, hist: np.ndarray = None):
     return mapping[gray], cdf, mapping
 
 
+def minmax_scale(x: np.ndarray, axis=None, where=None, eps: float = 1e-12) -> np.ndarray:
+    """
+    Scales x to [0, 1] along `axis` (None = whole array). `where` is an optional boolean
+    mask of the elements that take part in the min/max. Constant ranges map to 0.
+    """
+    x = np.asarray(x)
+    if not np.issubdtype(x.dtype, np.floating):
+        x = x.astype(np.float32)
+    kw_lo = {} if where is None else {"where": where, "initial": np.inf}
+    kw_hi = {} if where is None else {"where": where, "initial": -np.inf}
+    lo = x.min(axis=axis, keepdims=True, **kw_lo)
+    hi = x.max(axis=axis, keepdims=True, **kw_hi)
+    rng = hi - lo
+    flat = rng < eps
+    out = (x - lo) / np.where(flat, rng.dtype.type(1), rng)
+    return np.where(flat, x.dtype.type(0), out)
+
+
 def manual_normalize(image: np.ndarray):
     """Manual min-max normalization. Returns (norm_01 float32, norm_255 uint8, min, max)."""
     g = image.astype(np.float32)
     mn, mx = float(g.min()), float(g.max())
     if mx == mn:
         return np.zeros_like(g), image.copy(), int(mn), int(mx)
-    norm_01 = (g - mn) / (mx - mn)
+    norm_01 = minmax_scale(g)
     norm_255 = np.round(norm_01 * 255.0).astype(np.uint8)
     return norm_01, norm_255, int(mn), int(mx)
 
@@ -979,9 +1003,8 @@ def plot_histograms(image: np.ndarray, save_path: str):
 # ==========================================
 
 def calculate_image_gradients(image: np.ndarray):
-    """Sobel gradients (Ix, Iy). Reuses sobel_edge_detection instead of re-implementing Sobel."""
-    _, gx, gy, _ = sobel_edge_detection(image, process=False)
-    return gx, gy
+    """Sobel gradients (Ix, Iy) from the shared Sobel kernels (section 4)."""
+    return sobel_gradients(image)
 
 
 def calculate_image_energy(image: np.ndarray) -> np.ndarray:
@@ -1016,39 +1039,57 @@ def resample_contour(contour: np.ndarray, n_points: int) -> np.ndarray:
     return np.rint(out).astype(np.int64)
 
 
-def generate_candidates(point, search_radius: int, image_shape) -> np.ndarray:
-    """(2r+1)^2 neighbourhood inside the image; the current position comes FIRST (wins ties)."""
-    r0, c0 = np.rint(point).astype(int)
+def candidate_offsets(search_radius: int) -> np.ndarray:
+    """(2r+1)^2 (d_row, d_col) offsets; (0, 0) comes FIRST so the current position wins ties."""
     d = np.arange(-search_radius, search_radius + 1)
     dr, dc = np.meshgrid(d, d, indexing="ij")
     offs = np.stack([dr.ravel(), dc.ravel()], axis=1)
-    offs = np.vstack([[0, 0], offs[np.any(offs != 0, axis=1)]])
-    cands = offs + np.array([r0, c0])
+    return np.vstack([[0, 0], offs[np.any(offs != 0, axis=1)]])
+
+
+def generate_candidates(point, search_radius: int, image_shape) -> np.ndarray:
+    """Candidate positions of one point that lie inside the image."""
+    cands = candidate_offsets(search_radius) + np.rint(point).astype(int)
     ok = (cands[:, 0] >= 0) & (cands[:, 0] < image_shape[0]) & (cands[:, 1] >= 0) & (cands[:, 1] < image_shape[1])
     return cands[ok]
 
 
-def _minmax(x: np.ndarray) -> np.ndarray:
-    rng = x.max() - x.min()
-    return np.zeros_like(x) if rng < 1e-12 else (x - x.min()) / rng
+def _components(image_energy, prev_p, next_p, Q, d_avg):
+    """
+    Raw continuity / curvature / image energies. Works on one point (Q: (K, 2)) or on a batch of
+    points at once (Q: (m, K, 2), prev_p/next_p: (m, 2)). image_energy=None -> image term is 0.
+    """
+    prev_p, next_p = prev_p[..., None, :], next_p[..., None, :]
+    diff = Q - prev_p
+    e_cont = (np.sqrt(np.sum(diff * diff, axis=-1)) - d_avg) ** 2
+    e_curv = np.sum((prev_p - 2 * Q + next_p) ** 2, axis=-1)
+    if image_energy is None:
+        e_img = np.zeros(e_cont.shape)
+    else:
+        h, w = image_energy.shape
+        e_img = image_energy[np.clip(Q[..., 0].astype(int), 0, h - 1),
+                             np.clip(Q[..., 1].astype(int), 0, w - 1)]
+    return e_cont, e_curv, e_img
+
+
+def _pick_best(ec, ek, ei, alpha, beta, gamma, valid=None) -> np.ndarray:
+    """Min-max normalise each term over the (valid) candidates, combine, argmin along the last axis."""
+    total = (alpha * minmax_scale(ec, axis=-1, where=valid)
+             + beta * minmax_scale(ek, axis=-1, where=valid)
+             + gamma * minmax_scale(ei, axis=-1, where=valid))
+    if valid is not None:
+        total = np.where(valid, total, np.inf)
+    return np.argmin(total, axis=-1)
 
 
 def calculate_candidate_components(image_energy, contour, index, candidates, d_avg=None):
-    """Raw (un-weighted) continuity, curvature and image energies for every candidate.
-    image_energy=None -> image term is 0 (internal energy only)."""
+    """Raw (un-weighted) continuity, curvature and image energies for every candidate of one point."""
     contour = np.asarray(contour, dtype=float)
     n = len(contour)
     if d_avg is None:
         d_avg = average_spacing(contour)
-    prev_p, next_p = contour[(index - 1) % n], contour[(index + 1) % n]
-    Q = np.asarray(candidates, dtype=float)
-    e_cont = (np.linalg.norm(Q - prev_p, axis=1) - d_avg) ** 2
-    e_curv = np.sum((prev_p - 2 * Q + next_p) ** 2, axis=1)
-    if image_energy is None:
-        e_img = np.zeros(len(Q))
-    else:
-        e_img = image_energy[Q[:, 0].astype(int), Q[:, 1].astype(int)]
-    return e_cont, e_curv, e_img
+    return _components(image_energy, contour[(index - 1) % n], contour[(index + 1) % n],
+                       np.asarray(candidates, dtype=float), d_avg)
 
 
 def calculate_internal_energy(contour, index, alpha, beta, candidate=None, d_avg=None) -> float:
@@ -1067,29 +1108,61 @@ def calculate_candidate_energy(image_energy, contour, index, candidate, alpha, b
 
 
 def select_best_candidate(image_energy, contour, index, candidates, alpha, beta, gamma, d_avg=None):
-    """Min-max normalise each term across the candidates, combine, take argmin."""
+    """Single-point API: normalise each term across the candidates, combine, take argmin."""
     ec, ek, ei = calculate_candidate_components(image_energy, contour, index, candidates, d_avg)
-    total = alpha * _minmax(ec) + beta * _minmax(ek) + gamma * _minmax(ei)
-    return candidates[int(np.argmin(total))]
+    return candidates[int(_pick_best(ec, ek, ei, alpha, beta, gamma))]
+
+
+def _move_points(image_energy, ref, idx, offsets, alpha, beta, gamma, d_avg):
+    """New positions for the points `idx`, all evaluated in one vectorised step against `ref`."""
+    n = len(ref)
+    idx = np.asarray(idx)
+    Q = ref[idx][:, None, :] + offsets[None, :, :]                       # (m, K, 2)
+    h, w = image_energy.shape
+    valid = (Q[..., 0] >= 0) & (Q[..., 0] < h) & (Q[..., 1] >= 0) & (Q[..., 1] < w)
+    ec, ek, ei = _components(image_energy, ref[(idx - 1) % n].astype(float),
+                             ref[(idx + 1) % n].astype(float), Q.astype(float), d_avg)
+    best = _pick_best(ec, ek, ei, alpha, beta, gamma, valid)
+    return Q[np.arange(len(idx)), best]
 
 
 def evolve_contour(image_energy, initial_contour, alpha, beta, gamma, max_iterations=300,
                    search_radius=1, convergence_threshold=0.05, synchronous=True):
-    """Greedy snake. Returns (final_contour, history). synchronous=True: neighbours come from the
-    previous sweep; False: points are updated in place (sequential)."""
+    """
+    Greedy snake. Returns (final_contour, history).
+    synchronous=True : every point is updated from the previous sweep -> ALL points in one vectorised step.
+    synchronous=False: points are updated in place, one after another (inherently sequential).
+    Stops on convergence, or as soon as a state repeats (oscillation): the state that would be
+    reached after max_iterations is then known exactly, so the result is the same without running them.
+    """
     contour = np.asarray(initial_contour, dtype=np.int64).copy()
+    n = len(contour)
+    offsets = candidate_offsets(search_radius)
+    all_idx = np.arange(n)
     history = [contour.copy()]
-    for _ in range(max_iterations):
+    seen = {contour.tobytes(): 0}
+
+    for it in range(1, max_iterations + 1):
         d_avg = average_spacing(contour)
-        old, new = contour.copy(), contour.copy()
-        ref = old if synchronous else new          # `new` aliasing = sequential update
-        for i in range(len(contour)):
-            cands = generate_candidates(ref[i], search_radius, image_energy.shape)
-            new[i] = select_best_candidate(image_energy, ref, i, cands, alpha, beta, gamma, d_avg)
+        old = contour
+        if synchronous:
+            new = _move_points(image_energy, old, all_idx, offsets, alpha, beta, gamma, d_avg)
+        else:
+            new = old.copy()
+            for i in range(n):
+                new[i] = _move_points(image_energy, new, [i], offsets, alpha, beta, gamma, d_avg)[0]
         contour = new
         history.append(contour.copy())
+
         if np.mean(np.linalg.norm(contour - old, axis=1)) < convergence_threshold:
             break
+        key = contour.tobytes()
+        if key in seen:                                   # cycle of period p = it - j
+            j = seen[key]
+            contour = history[j + (max_iterations - j) % (it - j)].copy()
+            break
+        seen[key] = it
+
     return contour, history
 
 
