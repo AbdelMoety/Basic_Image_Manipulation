@@ -10,6 +10,8 @@ export interface ProcessResult {
   uploaded_image?: string;
   processed_image?: string;
   uploaded_image_2?: string;
+  chain_code?: string;
+  stats?: { perimeter: number; area: number; iterations?: number; points: number };
 }
 
 export interface ProcessParams {
@@ -46,6 +48,13 @@ export interface ProcessParams {
   cutoff_high: number;
   alpha: number;
   beta: number;
+  snake_points: number;
+  snake_alpha: number;
+  snake_beta: number;
+  snake_gamma: number;
+  snake_iters: number;
+  snake_radius: number;
+  snake_sync: boolean;
 }
 
 /** The two output windows. */

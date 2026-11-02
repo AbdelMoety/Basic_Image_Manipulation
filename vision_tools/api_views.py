@@ -84,6 +84,16 @@ OPERATIONS = [
         "group": "Edge Detection",
     },
     {
+        "id": "snake",
+        "label": "Active Contour / Snake (Greedy)",
+        "group": "Segmentation & Active Contour",
+    },
+    {
+        "id": "contour_measure",
+        "label": "Chain Code, Perimeter & Area (Manual)",
+        "group": "Segmentation & Active Contour",
+    },
+    {
         "id": "lowpass",
         "label": "Ideal Low-Pass Filter (FFT)",
         "group": "Frequency Domain & Hybrid",

@@ -9,6 +9,22 @@
   @if (info) {
     <p class="msg msg-ok" role="status">{{ info }}</p>
   }
+  @if (stats) {
+    <div class="stats" role="status">
+      <div><span>Perimeter</span><strong>{{ stats.perimeter }} px</strong></div>
+      <div><span>Area</span><strong>{{ stats.area }} px²</strong></div>
+      @if (stats.iterations !== undefined) {
+        <div><span>Iterations</span><strong>{{ stats.iterations }}</strong></div>
+      }
+      <div><span>Points</span><strong>{{ stats.points }}</strong></div>
+    </div>
+  }
+  @if (chainCode) {
+    <details class="msg msg-ok">
+      <summary>Chain code ({{ chainCode.length }} steps)</summary>
+      <textarea readonly rows="4" style="width:100%" [value]="chainCode"></textarea>
+    </details>
+  }
 
   <div class="columns">
     <!-- ============ controls ============ -->
@@ -128,10 +144,46 @@
             <input type="number" [(ngModel)]="params.ellipse_max" min="1" max="100" step="1" />
           </label>
         }
+        @if (needsContour) {
+          <div class="row">
+            <button type="button" class="mini" (click)="openDraw()">{{ showSnake ? 'Draw initial contour' : 'Draw contour' }}</button>
+            <span class="meta">{{ contour.length ? contour.length + ' points drawn' : 'not drawn yet' }}</span>
+          </div>
+        }
+        @if (showSnake) {
+          <label class="row half">
+            <span class="lbl">Contour points (N)</span>
+            <input type="number" [(ngModel)]="params.snake_points" min="3" max="1000" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">α continuity</span>
+            <input type="number" [(ngModel)]="params.snake_alpha" min="0" step="0.1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">β curvature</span>
+            <input type="number" [(ngModel)]="params.snake_beta" min="0" step="0.1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">γ image</span>
+            <input type="number" [(ngModel)]="params.snake_gamma" min="0" step="0.1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max iterations</span>
+            <input type="number" [(ngModel)]="params.snake_iters" min="1" max="5000" step="10" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Search radius (px)</span>
+            <input type="number" [(ngModel)]="params.snake_radius" min="1" max="10" step="1" />
+          </label>
+          <label class="check">
+            <input type="checkbox" [(ngModel)]="params.snake_sync" name="snake_sync" />
+            Synchronous update (all points use the previous iteration)
+          </label>
+        }
         @if (showDrawOption) {
           <label class="check">
             <input type="checkbox" [(ngModel)]="params.draw_on_image" name="draw_on_image" />
-            Draw detected {{ showEllipses ? 'ellipses' : showCircles ? 'circles' : 'lines' }} on the original image
+            Draw {{ needsContour ? 'the contour' : 'detected ' + (showEllipses ? 'ellipses' : showCircles ? 'circles' : 'lines') }} on the original image
           </label>
         }
         @if (showThresh) {
@@ -342,4 +394,39 @@
       }
     </section>
   </div>
+
+@if (drawOpen) {
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <header class="modal-head">
+        <strong>Draw the initial contour around the object</strong>
+      </header>
+      <p class="meta">Click around the object to add points in order. The points are joined by lines and the shape closes automatically.</p>
+
+      <div class="draw-wrap">
+        <img [src]="primaryPreview" alt="Image to outline" (load)="onDrawImgLoad($event)" draggable="false" />
+        <svg
+          [attr.viewBox]="'0 0 ' + imgW + ' ' + imgH"
+          preserveAspectRatio="none"
+          (pointerdown)="onDrawDown($event)"
+        >
+          @if (draft.length > 1) {
+            <polygon [attr.points]="polyPoints" fill="rgba(255,255,0,0.12)" stroke="yellow" [attr.stroke-width]="marker * 0.6" />
+          }
+          @for (p of draft; track $index) {
+            <circle [attr.cx]="p[0]" [attr.cy]="p[1]" [attr.r]="marker" fill="red" />
+          }
+        </svg>
+      </div>
+
+      <footer class="modal-foot">
+        <span class="meta">{{ draft.length }} points</span>
+        <button type="button" class="mini" (click)="undoPoint()" [disabled]="!draft.length">Undo</button>
+        <button type="button" class="mini" (click)="clearDraft()" [disabled]="!draft.length">Clear</button>
+        <button type="button" class="mini" (click)="cancelDraw()">Cancel</button>
+        <button type="button" class="submit" (click)="confirmDraw()" [disabled]="draft.length < 3">Use contour</button>
+      </footer>
+    </div>
+  </div>
+}
 </div>

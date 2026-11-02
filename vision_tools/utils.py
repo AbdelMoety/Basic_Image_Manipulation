@@ -972,3 +972,219 @@ def plot_histograms(image: np.ndarray, save_path: str):
     fig.savefig(save_path, dpi=100)
     plt.close(fig)
     return save_path
+
+
+# ==========================================
+# 7. Active Contour (Greedy Snake)
+# ==========================================
+
+def calculate_image_gradients(image: np.ndarray):
+    """Sobel gradients (Ix, Iy). Reuses sobel_edge_detection instead of re-implementing Sobel."""
+    _, gx, gy, _ = sobel_edge_detection(image, process=False)
+    return gx, gy
+
+
+def calculate_image_energy(image: np.ndarray) -> np.ndarray:
+    """E_image = -|grad I|^2, scaled to [-1, 0] so it is comparable to the other terms."""
+    ix, iy = calculate_image_gradients(image)
+    g2 = ix ** 2 + iy ** 2
+    m = g2.max()
+    return -g2 / m if m > 0 else -g2
+
+
+def preprocess_image(image: np.ndarray, sigma: float = 2.0) -> np.ndarray:
+    """Grayscale -> Gaussian smoothing. Reuses ensure_gray_from_bgr + gaussian_filter."""
+    gray = ensure_gray_from_bgr(image)
+    if sigma and sigma > 0:
+        gray = gaussian_filter(gray, kernel_size=2 * int(np.ceil(3 * sigma)) + 1, sigma=sigma)
+    return gray
+
+
+def average_spacing(contour: np.ndarray) -> float:
+    return float(np.linalg.norm(contour - np.roll(contour, 1, axis=0), axis=1).mean())
+
+
+def resample_contour(contour: np.ndarray, n_points: int) -> np.ndarray:
+    """Closed polygon -> exactly n_points, equally spaced along its length. (row, col) int."""
+    pts = np.asarray(contour, dtype=float)
+    closed = np.vstack([pts, pts[:1]])
+    cum = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(closed, axis=0), axis=1))])
+    if cum[-1] == 0:
+        raise ValueError("The drawn contour has zero length.")
+    t = np.linspace(0, cum[-1], n_points, endpoint=False)
+    out = np.stack([np.interp(t, cum, closed[:, 0]), np.interp(t, cum, closed[:, 1])], axis=1)
+    return np.rint(out).astype(np.int64)
+
+
+def generate_candidates(point, search_radius: int, image_shape) -> np.ndarray:
+    """(2r+1)^2 neighbourhood inside the image; the current position comes FIRST (wins ties)."""
+    r0, c0 = np.rint(point).astype(int)
+    d = np.arange(-search_radius, search_radius + 1)
+    dr, dc = np.meshgrid(d, d, indexing="ij")
+    offs = np.stack([dr.ravel(), dc.ravel()], axis=1)
+    offs = np.vstack([[0, 0], offs[np.any(offs != 0, axis=1)]])
+    cands = offs + np.array([r0, c0])
+    ok = (cands[:, 0] >= 0) & (cands[:, 0] < image_shape[0]) & (cands[:, 1] >= 0) & (cands[:, 1] < image_shape[1])
+    return cands[ok]
+
+
+def _minmax(x: np.ndarray) -> np.ndarray:
+    rng = x.max() - x.min()
+    return np.zeros_like(x) if rng < 1e-12 else (x - x.min()) / rng
+
+
+def calculate_candidate_components(image_energy, contour, index, candidates, d_avg=None):
+    """Raw (un-weighted) continuity, curvature and image energies for every candidate.
+    image_energy=None -> image term is 0 (internal energy only)."""
+    contour = np.asarray(contour, dtype=float)
+    n = len(contour)
+    if d_avg is None:
+        d_avg = average_spacing(contour)
+    prev_p, next_p = contour[(index - 1) % n], contour[(index + 1) % n]
+    Q = np.asarray(candidates, dtype=float)
+    e_cont = (np.linalg.norm(Q - prev_p, axis=1) - d_avg) ** 2
+    e_curv = np.sum((prev_p - 2 * Q + next_p) ** 2, axis=1)
+    if image_energy is None:
+        e_img = np.zeros(len(Q))
+    else:
+        e_img = image_energy[Q[:, 0].astype(int), Q[:, 1].astype(int)]
+    return e_cont, e_curv, e_img
+
+
+def calculate_internal_energy(contour, index, alpha, beta, candidate=None, d_avg=None) -> float:
+    """alpha*E_cont + beta*E_curv for point `index` (optionally evaluated AS IF it were at `candidate`)."""
+    contour = np.asarray(contour, dtype=float)
+    q = contour[index] if candidate is None else np.asarray(candidate, dtype=float)
+    ec, ek, _ = calculate_candidate_components(None, contour, index, q[None, :], d_avg)
+    return float(alpha * ec[0] + beta * ek[0])
+
+
+def calculate_candidate_energy(image_energy, contour, index, candidate, alpha, beta, gamma, d_avg=None) -> float:
+    """Raw (un-normalised) total energy of a single candidate position."""
+    ec, ek, ei = calculate_candidate_components(image_energy, contour, index,
+                                                np.asarray(candidate)[None, :], d_avg)
+    return float(alpha * ec[0] + beta * ek[0] + gamma * ei[0])
+
+
+def select_best_candidate(image_energy, contour, index, candidates, alpha, beta, gamma, d_avg=None):
+    """Min-max normalise each term across the candidates, combine, take argmin."""
+    ec, ek, ei = calculate_candidate_components(image_energy, contour, index, candidates, d_avg)
+    total = alpha * _minmax(ec) + beta * _minmax(ek) + gamma * _minmax(ei)
+    return candidates[int(np.argmin(total))]
+
+
+def evolve_contour(image_energy, initial_contour, alpha, beta, gamma, max_iterations=300,
+                   search_radius=1, convergence_threshold=0.05, synchronous=True):
+    """Greedy snake. Returns (final_contour, history). synchronous=True: neighbours come from the
+    previous sweep; False: points are updated in place (sequential)."""
+    contour = np.asarray(initial_contour, dtype=np.int64).copy()
+    history = [contour.copy()]
+    for _ in range(max_iterations):
+        d_avg = average_spacing(contour)
+        old, new = contour.copy(), contour.copy()
+        ref = old if synchronous else new          # `new` aliasing = sequential update
+        for i in range(len(contour)):
+            cands = generate_candidates(ref[i], search_radius, image_energy.shape)
+            new[i] = select_best_candidate(image_energy, ref, i, cands, alpha, beta, gamma, d_avg)
+        contour = new
+        history.append(contour.copy())
+        if np.mean(np.linalg.norm(contour - old, axis=1)) < convergence_threshold:
+            break
+    return contour, history
+
+
+# ---- rasterisation, chain code, measurements ----
+
+def bresenham_line(p0, p1):
+    r0, c0, r1, c1 = int(p0[0]), int(p0[1]), int(p1[0]), int(p1[1])
+    dr, dc = abs(r1 - r0), abs(c1 - c0)
+    sr, sc = (1 if r0 < r1 else -1), (1 if c0 < c1 else -1)
+    err, pts = dc - dr, []
+    while True:
+        pts.append((r0, c0))
+        if r0 == r1 and c0 == c1:
+            break
+        e2 = 2 * err
+        if e2 > -dr:
+            err -= dr; c0 += sc
+        if e2 < dc:
+            err += dc; r0 += sr
+    return pts
+
+
+def rasterize_contour(contour) -> np.ndarray:
+    """Closed ordered list of 8-connected boundary pixels (start pixel not repeated)."""
+    pts = np.rint(np.asarray(contour)).astype(int)
+    keep = [0] + [i for i in range(1, len(pts)) if not np.array_equal(pts[i], pts[i - 1])]
+    pts = pts[keep]
+    if len(pts) > 1 and np.array_equal(pts[0], pts[-1]):
+        pts = pts[:-1]
+    boundary = []
+    for i in range(len(pts)):
+        boundary.extend(bresenham_line(pts[i], pts[(i + 1) % len(pts)])[:-1])
+    return np.array(boundary, dtype=np.int64)
+
+
+# (d_row, d_col) -> Freeman code (0=E, 1=NE, 2=N, 3=NW, 4=W, 5=SW, 6=S, 7=SE)
+_DIR_TO_CODE = {(0, 1): 0, (-1, 1): 1, (-1, 0): 2, (-1, -1): 3,
+                (0, -1): 4, (1, -1): 5, (1, 0): 6, (1, 1): 7}
+
+
+def generate_chain_code(contour):
+    """Returns (start_pixel, chain_code list, boundary_pixels). Includes the closing step."""
+    boundary = rasterize_contour(contour)
+    m = len(boundary)
+    code = [_DIR_TO_CODE[tuple(int(v) for v in boundary[(i + 1) % m] - boundary[i])] for i in range(m)]
+    return tuple(int(v) for v in boundary[0]), code, boundary
+
+
+def calculate_perimeter(chain_code) -> float:
+    """P = N_straight + sqrt(2) * N_diagonal (odd Freeman codes are diagonal)."""
+    n_diag = sum(1 for c in chain_code if c % 2 == 1)
+    return (len(chain_code) - n_diag) + np.sqrt(2.0) * n_diag
+
+
+def calculate_area(contour) -> float:
+    """Shoelace formula on ordered (row, col) vertices."""
+    p = np.asarray(contour, dtype=np.float64)
+    r, c = p[:, 0], p[:, 1]
+    return 0.5 * abs(np.sum(c * np.roll(r, -1) - np.roll(c, -1) * r))
+
+
+def draw_contour(image, contour, color=(0, 255, 255), thickness=2, show_points=True) -> np.ndarray:
+    """Draws a closed (row, col) contour on a BGR copy of `image` (gray is converted to BGR)."""
+    out = np.array(image, dtype=np.uint8, order="C", copy=True)
+    if out.ndim == 2:
+        out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+    xy = np.asarray(contour)[:, ::-1].astype(np.int32)             # (row, col) -> (x, y)
+    cv2.polylines(out, [xy.reshape(-1, 1, 2)], True, color, thickness)
+    if show_points:
+        for x, y in xy:
+            cv2.circle(out, (int(x), int(y)), max(2, thickness + 1), (0, 0, 255), -1)
+    return out
+
+
+def snake_segmentation(image, contour_xy, n_points, alpha, beta, gamma, max_iterations=300,
+                       search_radius=1, sigma=2.0, convergence_threshold=0.05, synchronous=True):
+    """Full pipeline. `contour_xy` = user-drawn [(x, y), ...] in image pixels."""
+    smooth = preprocess_image(image, sigma)
+    h, w = smooth.shape
+    pts = np.asarray(contour_xy, dtype=float)
+    if pts.ndim != 2 or pts.shape[1] != 2 or len(pts) < 3:
+        raise ValueError("Draw at least 3 points for the initial contour.")
+    if n_points < 3:
+        raise ValueError("Number of contour points must be at least 3.")
+
+    initial = resample_contour(pts[:, ::-1], n_points)             # (x, y) -> (row, col)
+    initial[:, 0] = np.clip(initial[:, 0], 0, h - 1)
+    initial[:, 1] = np.clip(initial[:, 1], 0, w - 1)
+
+    energy = calculate_image_energy(smooth)
+    final, history = evolve_contour(energy, initial, alpha, beta, gamma, max_iterations,
+                                    search_radius, convergence_threshold, synchronous)
+    start, chain, _ = generate_chain_code(final)
+    return {
+        "initial": initial, "final": final, "history": history, "iterations": len(history) - 1,
+        "smoothed": smooth, "start": start, "chain": chain,
+        "perimeter": calculate_perimeter(chain), "area": calculate_area(final),
+    }

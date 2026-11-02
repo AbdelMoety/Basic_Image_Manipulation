@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 import hashlib
 import cv2
@@ -101,6 +102,13 @@ def process_image_upload(request_files, request_post):
     ellipse_votes = float(request_post.get("ellipse_votes") or 15)
     ellipse_support = float(request_post.get("ellipse_support") or 0.75)
     ellipse_max = int(float(request_post.get("ellipse_max") or 10))
+    snake_points = int(float(request_post.get("snake_points") or 60))
+    snake_alpha = float(request_post.get("snake_alpha") or 1.0)
+    snake_beta = float(request_post.get("snake_beta") or 1.0)
+    snake_gamma = float(request_post.get("snake_gamma") or 1.2)
+    snake_iters = int(float(request_post.get("snake_iters") or 300))
+    snake_radius = int(float(request_post.get("snake_radius") or 1))
+    snake_sync = request_post.get("snake_sync") in ("on", "true", "1", True)
 
     if kernel_size < 3:
         kernel_size = 3
@@ -246,6 +254,73 @@ def process_image_upload(request_files, request_post):
                 f"Hough ellipses — {len(ellipses)} detected (semi-major {ellipse_a_min:g}–{ellipse_a_max:g}px, "
                 f"min semi-minor {ellipse_b_min:g}px, min outline support {ellipse_support * 100:.0f}%) drawn on "
                 f"{'the original image' if draw_on_image else 'the edge map'}"
+            )
+
+        elif operation == "snake":
+            raw = request_post.get("snake_contour")
+            if not raw:
+                raise ValueError("Draw the initial contour first (Draw contour button).")
+            try:
+                drawn = json.loads(raw)
+            except json.JSONDecodeError:
+                raise ValueError("Initial contour is not valid JSON.")
+
+            res = utils.snake_segmentation(
+                img1, drawn, n_points=snake_points,
+                alpha=snake_alpha, beta=snake_beta, gamma=snake_gamma,
+                max_iterations=snake_iters, search_radius=max(1, snake_radius),
+                sigma=sigma, synchronous=snake_sync,
+            )
+            canvas = img1 if draw_on_image else res["smoothed"]
+            result_img = utils.draw_contour(canvas, res["initial"], color=(255, 128, 0), thickness=1, show_points=False)
+            result_img = utils.draw_contour(result_img, res["final"], color=(0, 255, 255), thickness=2)
+
+            context["chain_code"] = "".join(map(str, res["chain"]))
+            context["stats"] = {
+                "perimeter": round(float(res["perimeter"]), 2),
+                "area": round(float(res["area"]), 2),
+                "iterations": int(res["iterations"]),
+                "points": int(len(res["final"])),
+            }
+            context["info"] = (
+                f"Snake — {len(res['final'])} points, {res['iterations']} iterations, "
+                f"start pixel (row, col) = {res['start']}, chain length {len(res['chain'])}, "
+                f"perimeter = {res['perimeter']:.2f}px, area = {res['area']:.2f}px² "
+                f"(orange = initial, yellow = final)"
+            )
+
+        elif operation == "contour_measure":
+            raw = request_post.get("snake_contour")
+            if not raw:
+                raise ValueError("Draw the contour first (Draw contour button).")
+            try:
+                pts = np.asarray(json.loads(raw), dtype=float)
+            except json.JSONDecodeError:
+                raise ValueError("Contour is not valid JSON.")
+            if pts.ndim != 2 or pts.shape[1] != 2 or len(pts) < 3:
+                raise ValueError("Draw at least 3 points for the contour.")
+
+            h_img, w_img = img1.shape[:2]
+            contour = np.rint(pts[:, ::-1]).astype(np.int64)          # (x, y) -> (row, col)
+            contour[:, 0] = np.clip(contour[:, 0], 0, h_img - 1)
+            contour[:, 1] = np.clip(contour[:, 1], 0, w_img - 1)
+
+            start, chain, _ = utils.generate_chain_code(contour)
+            perimeter = utils.calculate_perimeter(chain)
+            area = utils.calculate_area(contour)
+
+            canvas = img1 if draw_on_image else img1_work
+            result_img = utils.draw_contour(canvas, contour, color=(0, 255, 255), thickness=2)
+
+            context["chain_code"] = "".join(map(str, chain))
+            context["stats"] = {
+                "perimeter": round(float(perimeter), 2),
+                "area": round(float(area), 2),
+                "points": int(len(contour)),
+            }
+            context["info"] = (
+                f"Contour measurements — {len(contour)} points, start pixel (row, col) = {start}, "
+                f"chain length {len(chain)}, perimeter = {perimeter:.2f}px, area = {area:.2f}px²"
             )
 
         elif operation in ("lowpass", "highpass"):

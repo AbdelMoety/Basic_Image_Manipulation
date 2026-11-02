@@ -471,3 +471,120 @@ $text-muted: #aaa;
     min-height: 0;
   }
 }
+
+// ---- snake: chain code panel ----
+details.msg {
+  summary {
+    cursor: pointer;
+    color: $yellow;
+  }
+
+  textarea {
+    margin-top: 8px;
+    background: $black;
+    color: #ddd;
+    border: 1px solid $border;
+    font-family: monospace;
+    font-size: 0.8rem;
+    resize: vertical;
+  }
+}
+
+// ---- snake: initial contour drawing dialog ----
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-card {
+  background: $panel;
+  color: #eee;
+  border: 1px solid $border;
+  border-top: 3px solid $yellow;
+  padding: 12px;
+  max-width: 95vw;
+  max-height: 95vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+
+  strong {
+    color: $yellow;
+  }
+
+  .meta {
+    margin: 0;
+    color: $text-muted;
+  }
+}
+
+.modal-head,
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.modal-foot {
+  justify-content: flex-end;
+}
+
+.draw-wrap {
+  position: relative;
+  display: inline-block;
+  align-self: center;
+  line-height: 0;
+  border: 1px solid $border;
+
+  img {
+    max-width: 90vw;
+    max-height: 70vh;
+    display: block;
+    user-select: none;
+  }
+
+  svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    touch-action: none;
+  }
+}
+
+// ---- snake: results panel ----
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 14px;
+
+  div {
+    flex: 1 1 140px;
+    padding: 10px 12px;
+    background: $panel;
+    border: 1px solid $border;
+    border-left: 3px solid $yellow;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  span {
+    color: $text-muted;
+    font-size: 0.8rem;
+  }
+
+  strong {
+    color: $yellow;
+    font-size: 1.15rem;
+  }
+}

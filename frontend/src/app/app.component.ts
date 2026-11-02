@@ -23,6 +23,8 @@ const AUTO_GRAY_OPS = new Set([
   'hough_lines',
   'hough_circles',
   'hough_ellipses',
+  'snake',
+  'contour_measure',
 ]);
 
 const MAX_RUNS = 30;
@@ -83,12 +85,29 @@ export class AppComponent implements OnInit {
     cutoff_high: 25,
     alpha: 0.5,
     beta: 0.5,
+    snake_points: 60,
+    snake_alpha: 1,
+    snake_beta: 1,
+    snake_gamma: 1.2,
+    snake_iters: 300,
+    snake_radius: 1,
+    snake_sync: true,
   };
 
   loading = false;
   furthering = false;
   error: string | null = null;
   info: string | null = null;
+  chainCode: string | null = null;
+  stats: { perimeter: number; area: number; iterations?: number; points: number } | null = null;
+
+  // ---- snake: initial contour drawing ----
+  /** Committed contour, [x, y] in IMAGE pixels. */
+  contour: [number, number][] = [];
+  drawOpen = false;
+  draft: [number, number][] = [];
+  imgW = 1;
+  imgH = 1;
 
   /** Finished runs, newest first. */
   runs: RunEntry[] = [];
@@ -134,7 +153,17 @@ export class AppComponent implements OnInit {
     return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny', 'hough_lines', 'hough_circles', 'hough_ellipses'].includes(this.op);
   }
   get showSigma(): boolean {
-    return this.op === 'gaussian' || this.op === 'manual_canny' || this.op === 'hough_lines' || this.op === 'hough_circles' || this.op === 'hough_ellipses';
+    return ['gaussian', 'manual_canny', 'hough_lines', 'hough_circles', 'hough_ellipses', 'snake'].includes(this.op);
+  }
+  get showSnake(): boolean {
+    return this.op === 'snake';
+  }
+  get showMeasure(): boolean {
+    return this.op === 'contour_measure';
+  }
+  /** Operations that need the user to draw a contour first. */
+  get needsContour(): boolean {
+    return this.showSnake || this.showMeasure;
   }
   get showCannyThresh(): boolean {
     return this.op === 'auto_canny' || this.op === 'manual_canny' || this.op === 'hough_lines' || this.op === 'hough_circles' || this.op === 'hough_ellipses';
@@ -149,7 +178,7 @@ export class AppComponent implements OnInit {
     return this.op === 'hough_ellipses';
   }
   get showDrawOption(): boolean {
-    return this.showHough || this.showCircles || this.showEllipses;
+    return this.showHough || this.showCircles || this.showEllipses || this.needsContour;
   }
   get showThresh(): boolean {
     return this.op === 'threshold';
@@ -182,7 +211,7 @@ export class AppComponent implements OnInit {
     return (
       this.showKernel || this.showSigma || this.showCannyThresh || this.showThresh ||
       this.showIterDiff || this.showLocal || this.showNoise || this.showSaltPepper ||
-      this.showHough || this.showCircles || this.showEllipses || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
+      this.showHough || this.showCircles || this.showEllipses || this.needsContour || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
       this.showGrayToggle
     );
   }
@@ -277,9 +306,72 @@ export class AppComponent implements OnInit {
     }
   }
 
+  // ---- snake drawing dialog ----
+  openDraw(): void {
+    if (!this.primaryPreview) {
+      this.error = 'Upload Image 1 first.';
+      return;
+    }
+    this.draft = this.contour.map((p) => [...p] as [number, number]);
+    this.drawOpen = true;
+  }
+
+  onDrawImgLoad(ev: Event): void {
+    const img = ev.target as HTMLImageElement;
+    this.imgW = img.naturalWidth;
+    this.imgH = img.naturalHeight;
+  }
+
+  get marker(): number {
+    return Math.max(2, this.imgW / 180);
+  }
+
+  get polyPoints(): string {
+    return this.draft.map((p) => p.join(',')).join(' ');
+  }
+
+  private toImageXY(ev: PointerEvent): [number, number] {
+    const r = (ev.currentTarget as SVGSVGElement).getBoundingClientRect();
+    const x = Math.min(this.imgW - 1, Math.max(0, ((ev.clientX - r.left) * this.imgW) / r.width));
+    const y = Math.min(this.imgH - 1, Math.max(0, ((ev.clientY - r.top) * this.imgH) / r.height));
+    return [Math.round(x), Math.round(y)];
+  }
+
+  /** Each click adds a point; points are joined in order and the shape closes automatically. */
+  onDrawDown(ev: PointerEvent): void {
+    this.draft.push(this.toImageXY(ev));
+  }
+
+  undoPoint(): void {
+    this.draft.pop();
+  }
+
+  clearDraft(): void {
+    this.draft = [];
+  }
+
+  cancelDraw(): void {
+    this.drawOpen = false;
+  }
+
+  confirmDraw(): void {
+    if (this.draft.length < 3) {
+      return;
+    }
+    this.contour = this.draft;
+    this.drawOpen = false;
+    this.info = this.showSnake
+      ? `Initial contour set (${this.contour.length} clicked points). It will be resampled to ${this.params.snake_points} points.`
+      : `Contour set (${this.contour.length} clicked points).`;
+  }
+
   // ---- inputs ----
   onOperationChange(): void {
     this.params.filter_type = this.selectedOperation;
+    if (this.showSnake) {
+      this.params.sigma = 2; // smoothing the snake's image energy works best around 2
+    }
+    this.chainCode = null;
     if (!this.showImage2) {
       this.inputTab = 1;
     }
@@ -290,6 +382,7 @@ export class AppComponent implements OnInit {
   onPrimarySelected(event: Event): void {
     const file = (event.target as HTMLInputElement).files?.[0] ?? null;
     this.chainStep = 0;
+    this.contour = [];
     this.setPrimary(file, false);
   }
 
@@ -309,6 +402,10 @@ export class AppComponent implements OnInit {
       this.error = 'Hybrid mode needs a second image.';
       return;
     }
+    if (this.needsContour && this.contour.length < 3) {
+      this.error = 'Draw the initial contour first.';
+      return;
+    }
 
     const form = new FormData();
     form.append('image', this.primaryFile);
@@ -322,6 +419,14 @@ export class AppComponent implements OnInit {
     if (this.showDrawOption && this.params.draw_on_image) {
       form.append('draw_on_image', 'on');
     }
+    if (this.needsContour) {
+      form.append('snake_contour', JSON.stringify(this.contour));
+    }
+    if (this.op === 'snake') {
+      if (this.params.snake_sync) {
+        form.append('snake_sync', 'on');
+      }
+    }
 
     const numericKeys: (keyof ProcessParams)[] = [
       'kernel_size', 'sigma', 'canny_low', 'canny_high', 'thresh_val', 'iter_diff', 'local_win', 'local_c',
@@ -329,6 +434,7 @@ export class AppComponent implements OnInit {
       'cutoff_low', 'cutoff_high', 'alpha', 'beta', 'hough_thresh',
       'circle_r_min', 'circle_r_max', 'circle_ratio', 'circle_min_dist', 'circle_max',
       'ellipse_a_min', 'ellipse_a_max', 'ellipse_b_min', 'ellipse_votes', 'ellipse_support', 'ellipse_max',
+      'snake_points', 'snake_alpha', 'snake_beta', 'snake_gamma', 'snake_iters', 'snake_radius',
     ];
     for (const key of numericKeys) {
       const value = this.params[key];
@@ -341,6 +447,8 @@ export class AppComponent implements OnInit {
     this.loading = true;
     this.error = null;
     this.info = null;
+    this.chainCode = null;
+    this.stats = null;
     const opId = this.selectedOperation;
 
     this.api.processImage(form).subscribe({
@@ -369,6 +477,8 @@ export class AppComponent implements OnInit {
           ...this.runs,
         ].slice(0, MAX_RUNS);
         this.info = res.info ?? null;
+        this.chainCode = res.chain_code ?? null;
+        this.stats = res.stats ?? null;
       },
       error: (err) => {
         this.loading = false;
