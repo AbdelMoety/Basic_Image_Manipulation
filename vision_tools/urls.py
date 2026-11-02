@@ -8,4 +8,5 @@ urlpatterns = [
     path("api/health/", api_views.health, name="api_health"),
     path("api/operations/", api_views.operations_list, name="api_operations"),
     path("api/process/", api_views.process_image_api, name="api_process"),
+    path("api/upload/", api_views.upload_image_api, name="api_upload"),
 ]
