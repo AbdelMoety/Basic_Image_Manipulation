@@ -2,6 +2,11 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+import os
+
+from django.core.files.storage import FileSystemStorage
+
+from . import image_store
 from .processing import process_image_upload
 
 
@@ -99,6 +104,24 @@ OPERATIONS = [
 @require_http_methods(["GET"])
 def operations_list(request):
     return JsonResponse({"operations": OPERATIONS})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def upload_image_api(request):
+    """Upload an image ONCE; later /process/ calls send the returned image_id instead of the file."""
+    f = request.FILES.get("image")
+    if not f:
+        return JsonResponse({"error": "No image provided."}, status=400)
+    fs = FileSystemStorage()
+    image_id, path, url = image_store.save_upload(fs, f)
+    if image_store.load_bgr(image_id, path) is None:     # also warms the decode cache
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return JsonResponse({"error": "Could not decode the uploaded image."}, status=400)
+    return JsonResponse({"image_id": image_id, "url": url})
 
 
 @csrf_exempt

@@ -10,6 +10,7 @@ import {
   WindowKey,
   WindowView,
 } from './models/operation.model';
+import { ImageUploadService } from './services/image-upload.service';
 import { VisionApiService } from './services/vision-api.service';
 
 const AUTO_GRAY_OPS = new Set([
@@ -35,6 +36,7 @@ const MAX_RUNS = 30;
 })
 export class AppComponent implements OnInit {
   private readonly api = inject(VisionApiService);
+  private readonly uploads = inject(ImageUploadService);
 
   @ViewChild('primaryInput') private primaryInput?: ElementRef<HTMLInputElement>;
 
@@ -95,6 +97,12 @@ export class AppComponent implements OnInit {
   detectLines = false;
   detectCircles = false;
   detectEllipses = false;
+
+  /** Server-side ids of the uploaded images: each operation sends the id, not the file again. */
+  private primaryId: string | null = null;
+  private secondaryId: string | null = null;
+  private primaryUpload: Promise<string | null> | null = null;
+  private secondaryUpload: Promise<string | null> | null = null;
 
   loading = false;
   furthering = false;
@@ -418,9 +426,18 @@ export class AppComponent implements OnInit {
     this.secondaryFile = file;
     this.revokePreview(this.secondaryPreview);
     this.secondaryPreview = file ? URL.createObjectURL(file) : null;
+    this.secondaryId = null;
+    this.secondaryUpload = file
+      ? this.upload(file).then((id) => {
+          if (this.secondaryFile === file) {
+            this.secondaryId = id;
+          }
+          return id;
+        })
+      : null;
   }
 
-  process(): void {
+  async process(): Promise<void> {
     if (!this.primaryFile) {
       this.error = 'Upload Image 1 first.';
       return;
@@ -434,10 +451,25 @@ export class AppComponent implements OnInit {
       return;
     }
 
+    this.loading = true;
+    const primaryFile: File = this.primaryFile;
+    const secondaryFile = this.secondaryFile;
+    // Usually already uploaded when the file was picked; otherwise this just awaits that upload.
+    const primaryId = this.primaryId ?? (await this.primaryUpload);
+    const secondaryId = secondaryFile ? (this.secondaryId ?? (await this.secondaryUpload)) : null;
+
     const form = new FormData();
-    form.append('image', this.primaryFile);
-    if (this.secondaryFile) {
-      form.append('image_2', this.secondaryFile);
+    if (primaryId) {
+      form.append('image_id', primaryId);
+    } else {
+      form.append('image', primaryFile); // upload failed or unavailable: fall back to sending the file
+    }
+    if (secondaryFile) {
+      if (secondaryId) {
+        form.append('image_2_id', secondaryId);
+      } else {
+        form.append('image_2', secondaryFile);
+      }
     }
     form.append('filter_type', this.selectedOperation);
     if (this.params.convert_gray) {
@@ -526,9 +558,31 @@ export class AppComponent implements OnInit {
     this.primaryFile = file;
     this.revokePreview(this.primaryPreview);
     this.primaryPreview = file ? URL.createObjectURL(file) : null;
+    this.primaryId = null;
+    this.primaryUpload = file
+      ? this.upload(file).then((id) => {
+          if (this.primaryFile === file) {
+            this.primaryId = id;
+          }
+          return id;
+        })
+      : null;
     if (file && syncInput) {
       this.syncPrimaryInput(file);
     }
+  }
+
+  /** Upload once; resolves to the server's image id, or null (then the file is sent with the request). */
+  private upload(file: File): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.uploads.upload(file).subscribe({
+        next: (res) => resolve(res.image_id ?? null),
+        error: (err) => {
+          console.warn('Image upload failed; the file will be sent with the request instead.', err);
+          resolve(null);
+        },
+      });
+    });
   }
 
   private async fetchBlob(url: string): Promise<Blob> {

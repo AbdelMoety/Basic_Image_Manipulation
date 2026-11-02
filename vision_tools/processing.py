@@ -1,26 +1,13 @@
 import os
 import json
 import uuid
-import hashlib
 import cv2
 from django.core.files.storage import FileSystemStorage
 import numpy as np
 from . import utils
+from . import image_store
 
 VALID_DETECTIONS = ("lines", "circles", "ellipses")
-
-
-def _save_uploaded_file(fs: FileSystemStorage, uploaded_file):
-    unique_name = f"{uuid.uuid4().hex[:8]}_{uploaded_file.name}"
-    filename = fs.save(unique_name, uploaded_file)
-    return fs.path(filename), fs.url(filename)
-
-def _file_sha256(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _get_shifted_fft(fs: FileSystemStorage, content_hash: str, image: np.ndarray):
@@ -53,23 +40,24 @@ def process_image_upload(request_files, request_post):
     """
     context = {}
 
-    if not request_files.get("image"):
-        context["error"] = "Primary image is required."
-        return context
-
     fs = FileSystemStorage()
     operation = request_post.get("filter_type", "sobel")
     apply_gray = request_post.get("convert_gray") in ("on", "true", "1", True)
 
-    img1_path, img1_url = _save_uploaded_file(fs, request_files["image"])
-    img1 = cv2.imread(img1_path)
+    # Re-use an already-uploaded image (image_id) or save a new upload once (de-duplicated by content).
+    src = image_store.resolve(fs, request_files, request_post, "image", "image_id")
+    if src is None:
+        context["error"] = "Primary image is required (or its earlier upload expired - select it again)."
+        return context
+    img1_id, img1_path, img1_url = src
 
+    img1 = image_store.load_bgr(img1_id, img1_path)     # decoded once, then served from memory
     if img1 is None:
         context["error"] = "Could not decode the uploaded image."
         return context
 
     if apply_gray or operation == "rgb2gray":
-        img1_work = utils.ensure_gray_from_bgr(img1)
+        img1_work = image_store.load_gray(img1_id, img1)  # grayscale computed once per image
     else:
         img1_work = img1
 
@@ -182,13 +170,12 @@ def process_image_upload(request_files, request_post):
             if unknown:
                 raise ValueError(f"Unknown detection type(s): {', '.join(unknown)}")
 
-            edges = utils.manual_canny(
-                img1_work,
-                low_threshold=canny_low,
-                high_threshold=canny_high,
-                sigma=sigma,
-                gaussian_kernel_size=kernel_size,
+            edges = image_store.get_edges(
+                img1_id, img1_work, canny_low, canny_high, sigma, kernel_size
             )
+            theta = None
+            if "circles" in detections or "ellipses" in detections:
+                theta = image_store.get_theta(img1_id, img1_work, sigma, kernel_size)
             info_parts = [
                 f"Manual Canny — Low: {canny_low:g}, High: {canny_high:g} "
                 f"(Gaussian: {kernel_size}×{kernel_size}, σ = {sigma:g}), "
@@ -222,6 +209,7 @@ def process_image_upload(request_files, request_post):
                     min_dist=circle_min_dist,
                     max_circles=circle_max,
                     edges=edges,
+                    theta=theta,
                 )
                 result_img = utils.draw_circles(result_img, circles)
                 info_parts.append(
@@ -248,6 +236,7 @@ def process_image_upload(request_files, request_post):
                     min_support=ellipse_support,
                     max_ellipses=ellipse_max,
                     edges=edges,
+                    theta=theta,
                 )
                 result_img = utils.draw_ellipses(result_img, ellipses)
                 info_parts.append(
@@ -330,7 +319,7 @@ def process_image_upload(request_files, request_post):
 
         elif operation in ("lowpass", "highpass"):
             cutoff = cutoff_low if operation == "lowpass" else cutoff_high
-            content_hash = _file_sha256(img1_path)
+            content_hash = img1_id
             fft_shifted, cache_hit = _get_shifted_fft(fs, content_hash, img1_work)
             result_img = utils.frequency_filter_pipeline(
                 img1_work, cutoff=cutoff, filter_type=operation, fft_shifted=fft_shifted
@@ -341,19 +330,19 @@ def process_image_upload(request_files, request_post):
             )
 
         elif operation == "hybrid":
-            if not request_files.get("image_2"):
+            src2 = image_store.resolve(fs, request_files, request_post, "image_2", "image_2_id")
+            if src2 is None:
                 context["error"] = "Please upload a second image to generate a Hybrid Image."
                 return context
-
-            img2_path, img2_url = _save_uploaded_file(fs, request_files["image_2"])
-            img2 = cv2.imread(img2_path)
+            img2_id, img2_path, img2_url = src2
+            img2 = image_store.load_bgr(img2_id, img2_path)
             if img2 is None:
                 context["error"] = "Could not decode the second uploaded image."
                 return context
 
-            img2_work = utils.ensure_gray_from_bgr(img2) if apply_gray else img2
+            img2_work = image_store.load_gray(img2_id, img2) if apply_gray else img2
 
-            hashes = {1: _file_sha256(img1_path), 2: _file_sha256(img2_path)}
+            hashes = {1: img1_id, 2: img2_id}
             hits = {}
 
             def fft_getter(img, idx):
@@ -404,7 +393,7 @@ def process_image_upload(request_files, request_post):
             )
 
         elif operation == "plot_histograms":
-            plot_filename = f"hist_{os.path.splitext(os.path.basename(img1_path))[0]}.png"
+            plot_filename = f"hist_{uuid.uuid4().hex[:8]}.png"
             plot_path = fs.path(plot_filename)
             utils.plot_histograms(img1_work, plot_path)
             context["uploaded_image"] = img1_url
@@ -416,7 +405,7 @@ def process_image_upload(request_files, request_post):
             context["error"] = f"Unknown operation: {operation}"
             return context
 
-        out_filename = f"processed_{operation}_{os.path.basename(img1_path)}"
+        out_filename = f"processed_{operation}_{uuid.uuid4().hex[:8]}.png"
         out_path = fs.path(out_filename)
         cv2.imwrite(out_path, result_img)
 
