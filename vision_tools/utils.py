@@ -1054,13 +1054,6 @@ def candidate_offsets(search_radius: int) -> np.ndarray:
     return np.vstack([[0, 0], offs[np.any(offs != 0, axis=1)]])
 
 
-def generate_candidates(point, search_radius: int, image_shape) -> np.ndarray:
-    """Candidate positions of one point that lie inside the image."""
-    cands = candidate_offsets(search_radius) + np.rint(point).astype(int)
-    ok = (cands[:, 0] >= 0) & (cands[:, 0] < image_shape[0]) & (cands[:, 1] >= 0) & (cands[:, 1] < image_shape[1])
-    return cands[ok]
-
-
 def _components(image_energy, prev_p, next_p, Q, d_avg):
     """
     Raw continuity / curvature / image energies. Works on one point (Q: (K, 2)) or on a batch of
@@ -1112,12 +1105,6 @@ def calculate_candidate_energy(image_energy, contour, index, candidate, alpha, b
     ec, ek, ei = calculate_candidate_components(image_energy, contour, index,
                                                 np.asarray(candidate)[None, :], d_avg)
     return float(alpha * ec[0] + beta * ek[0] + gamma * ei[0])
-
-
-def select_best_candidate(image_energy, contour, index, candidates, alpha, beta, gamma, d_avg=None):
-    """Single-point API: normalise each term across the candidates, combine, take argmin."""
-    ec, ek, ei = calculate_candidate_components(image_energy, contour, index, candidates, d_avg)
-    return candidates[int(_pick_best(ec, ek, ei, alpha, beta, gamma))]
 
 
 def _move_points(image_energy, ref, idx, offsets, alpha, beta, gamma, d_avg):
