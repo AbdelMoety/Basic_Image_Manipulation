@@ -1,0 +1,31 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Segoe UI, Tahoma, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  background: #0c0c0c;
+  color: #e8e8e8;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid #f0c000;
+  outline-offset: 2px;
+}

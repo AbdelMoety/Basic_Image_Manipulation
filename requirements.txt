@@ -1,0 +1,8 @@
+# Basic_Image_Manipulation — Python backend dependencies
+# Python 3.10+ recommended (project generated with Django 5.2)
+
+Django==5.2.18
+django-cors-headers==4.9.0
+opencv-python==5.0.0.93
+numpy==2.1.0
+matplotlib==3.11.0

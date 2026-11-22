@@ -1,0 +1,662 @@
+import { CommonModule } from '@angular/common';
+import { Component, ElementRef, HostListener, OnInit, ViewChild, inject } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { ZoomPanDirective } from './directives/zoom-pan.directive';
+
+import {
+  CvOperation,
+  ProcessParams,
+  RunEntry,
+  WindowKey,
+  WindowView,
+} from './models/operation.model';
+import { ImageUploadService } from './services/image-upload.service';
+import { VisionApiService } from './services/vision-api.service';
+
+const AUTO_GRAY_OPS = new Set([
+  'rgb2gray',
+  'threshold',
+  'iter_threshold',
+  'local_threshold',
+  'equalize',
+  'auto_canny',
+  'manual_canny',
+  'snake',
+  'contour_measure',
+  'sift_scale_space',
+  'sift_keypoints',
+  'sift_match_ssd',
+  'sift_match_ncc',
+]);
+
+/** SIFT works on grayscale; the conversion happens on the server. */
+const SIFT_OPS = new Set(['sift_scale_space', 'sift_keypoints', 'sift_match_ssd', 'sift_match_ncc']);
+const SIFT_MATCH_OPS = new Set(['sift_match_ssd', 'sift_match_ncc']);
+
+/** Outputs that are annotated figures/charts: viewable and savable, but not reusable as an input. */
+const FIGURE_OPS = new Set(['plot_histograms', ...SIFT_OPS]);
+
+const MAX_RUNS = 30;
+
+@Component({
+  selector: 'app-root',
+  standalone: true,
+  imports: [CommonModule, FormsModule, ZoomPanDirective],
+  templateUrl: './app.component.html',
+  styleUrl: './app.component.scss',
+})
+export class AppComponent implements OnInit {
+  private readonly api = inject(VisionApiService);
+  private readonly uploads = inject(ImageUploadService);
+
+  @ViewChild('primaryInput') private primaryInput?: ElementRef<HTMLInputElement>;
+
+  title = 'Digital Image Processing Studio';
+  operations: CvOperation[] = [];
+  groupedOperations: { group: string; items: CvOperation[] }[] = [];
+
+  selectedOperation = 'sobel';
+  primaryFile: File | null = null;
+  secondaryFile: File | null = null;
+  primaryPreview: string | null = null;
+  secondaryPreview: string | null = null;
+
+  params: ProcessParams = {
+    filter_type: 'sobel',
+    convert_gray: false,
+    hough_thresh: 100,
+    circle_r_min: 20,
+    circle_r_max: 100,
+    circle_ratio: 0.4,
+    circle_min_dist: 15,
+    circle_max: 20,
+    ellipse_a_min: 15,
+    ellipse_a_max: 100,
+    ellipse_b_min: 8,
+    ellipse_votes: 15,
+    ellipse_support: 0.75,
+    ellipse_max: 10,
+    draw_on_image: true,
+    kernel_size: 3,
+    sigma: 1.0,
+    canny_low: 50,
+    canny_high: 150,
+    thresh_val: 128,
+    iter_diff: 0.001,
+    local_win: 15,
+    local_c: 5.0,
+    noise_mean: 0,
+    noise_sigma: 25,
+    sp_amount: 0.05,
+    sp_salt_ratio: 0.5,
+    uniform_low: -25,
+    uniform_high: 25,
+    cutoff_low: 25,
+    cutoff_high: 25,
+    alpha: 0.5,
+    beta: 0.5,
+    snake_points: 60,
+    snake_alpha: 1,
+    snake_beta: 1,
+    snake_gamma: 1.2,
+    snake_iters: 300,
+    snake_radius: 1,
+    snake_sync: true,
+    sift_ratio: 0.8,
+    sift_contrast: 0.01,
+    sift_edge_ratio: 10,
+    sift_max_size: 400,
+    sift_draw: 60,
+  };
+
+  /** Shapes to detect on the Manual Canny edge map (any combination, or none). */
+  detectLines = false;
+  detectCircles = false;
+  detectEllipses = false;
+
+  /** Server-side ids of the uploaded images: each operation sends the id, not the file again. */
+  private primaryId: string | null = null;
+  private secondaryId: string | null = null;
+  private primaryUpload: Promise<string | null> | null = null;
+  private secondaryUpload: Promise<string | null> | null = null;
+
+  loading = false;
+  furthering = false;
+  error: string | null = null;
+  info: string | null = null;
+  chainCode: string | null = null;
+  stats: { perimeter: number; area: number; iterations?: number; points: number } | null = null;
+
+  // ---- snake: initial contour drawing ----
+  /** Committed contour, [x, y] in IMAGE pixels. */
+  contour: [number, number][] = [];
+  drawOpen = false;
+  draft: [number, number][] = [];
+  imgW = 1;
+  imgH = 1;
+
+  /** Finished runs, newest first. */
+  runs: RunEntry[] = [];
+  private runCount = 0;
+  /** How many times "Use as input" has been applied (0 = untouched upload). */
+  chainStep = 0;
+
+  // ---- windows ----
+  /** Which input image the input window shows (2 is only used by hybrid). */
+  inputTab: 1 | 2 = 1;
+  /** What each output window shows: a run id, or '' for empty. */
+  slots: Record<WindowKey, string> = { out1: '', out2: '' };
+  /** Which output window the next run will appear in (chosen in Controls). */
+  target: WindowKey = 'out1';
+  readonly outputKeys: WindowKey[] = ['out1', 'out2'];
+
+  /** The window currently shown full screen (null when none). */
+  fullscreenEl: Element | null = null;
+
+  ngOnInit(): void {
+    this.api.listOperations().subscribe({
+      next: (res) => {
+        this.operations = res.operations;
+        this.groupedOperations = this.groupByCategory(res.operations);
+      },
+      error: () => {
+        this.error = 'Backend not reachable. Start it with: python manage.py runserver';
+      },
+    });
+  }
+
+  // ---- which parameter fields to show ----
+  get op(): string {
+    return this.selectedOperation;
+  }
+  get showGrayToggle(): boolean {
+    return !AUTO_GRAY_OPS.has(this.op);
+  }
+  get showImage2(): boolean {
+    return this.op === 'hybrid' || this.showSiftMatch;
+  }
+  get image2Label(): string {
+    return this.showSiftMatch ? 'Image 2 (to match)' : 'Image 2 (hybrid)';
+  }
+  /** Every SIFT operation shares the keypoint-detection settings. */
+  get showSift(): boolean {
+    return SIFT_OPS.has(this.op);
+  }
+  /** Matching operations also need Image 2, the ratio test and the number of matches to draw. */
+  get showSiftMatch(): boolean {
+    return SIFT_MATCH_OPS.has(this.op);
+  }
+  /** Scale space & DoG only visualise the pyramid, so the keypoint thresholds don't apply. */
+  get showSiftThresholds(): boolean {
+    return this.showSift && this.op !== 'sift_scale_space';
+  }
+  get showKernel(): boolean {
+    return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny'].includes(this.op);
+  }
+  get showSigma(): boolean {
+    return ['gaussian', 'manual_canny', 'snake'].includes(this.op);
+  }
+  get showSnake(): boolean {
+    return this.op === 'snake';
+  }
+  get showMeasure(): boolean {
+    return this.op === 'contour_measure';
+  }
+  /** Operations that need the user to draw a contour first. */
+  get needsContour(): boolean {
+    return this.showSnake || this.showMeasure;
+  }
+  get showCannyThresh(): boolean {
+    return this.op === 'auto_canny' || this.op === 'manual_canny';
+  }
+  /** The "detect shapes on the edges" picker lives inside Manual Canny. */
+  get showDetectPicker(): boolean {
+    return this.op === 'manual_canny';
+  }
+  get anyDetection(): boolean {
+    return this.detectLines || this.detectCircles || this.detectEllipses;
+  }
+  get showHough(): boolean {
+    return this.showDetectPicker && this.detectLines;
+  }
+  get showCircles(): boolean {
+    return this.showDetectPicker && this.detectCircles;
+  }
+  get showEllipses(): boolean {
+    return this.showDetectPicker && this.detectEllipses;
+  }
+  get showDrawOption(): boolean {
+    return (this.showDetectPicker && this.anyDetection) || this.needsContour;
+  }
+  /** Comma-separated list sent to the backend, e.g. "lines,ellipses". */
+  get detectionsParam(): string {
+    const d: string[] = [];
+    if (this.detectLines) d.push('lines');
+    if (this.detectCircles) d.push('circles');
+    if (this.detectEllipses) d.push('ellipses');
+    return d.join(',');
+  }
+  get drawLabel(): string {
+    if (this.needsContour) {
+      return 'the contour';
+    }
+    const names: string[] = [];
+    if (this.detectLines) names.push('lines');
+    if (this.detectCircles) names.push('circles');
+    if (this.detectEllipses) names.push('ellipses');
+    return 'detected ' + names.join(' / ');
+  }
+  get showThresh(): boolean {
+    return this.op === 'threshold';
+  }
+  get showIterDiff(): boolean {
+    return this.op === 'iter_threshold';
+  }
+  get showLocal(): boolean {
+    return this.op === 'local_threshold';
+  }
+  get showNoise(): boolean {
+    return this.op === 'awgn';
+  }
+  get showSaltPepper(): boolean {
+    return this.op === 'salt_pepper';
+  }
+  get showUniform(): boolean {
+    return this.op === 'uniform_noise';
+  }
+  get showCutoffLow(): boolean {
+    return this.op === 'lowpass' || this.op === 'hybrid';
+  }
+  get showCutoffHigh(): boolean {
+    return this.op === 'highpass' || this.op === 'hybrid';
+  }
+  get showHybridWeights(): boolean {
+    return this.op === 'hybrid';
+  }
+  get hasParams(): boolean {
+    return (
+      this.showKernel || this.showSigma || this.showCannyThresh || this.showThresh ||
+      this.showIterDiff || this.showLocal || this.showNoise || this.showSaltPepper ||
+      this.showHough || this.showCircles || this.showEllipses || this.needsContour || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
+      this.showSift || this.showGrayToggle
+    );
+  }
+
+  // ---- windows ----
+  get inputUrl(): string | null {
+    return this.inputTab === 2 ? this.secondaryPreview : this.primaryPreview;
+  }
+
+  view(key: WindowKey): WindowView {
+    const id = this.slots[key];
+    const run = id ? (this.runs.find((r) => r.id === id) ?? null) : null;
+    const name = key === 'out1' ? 'Output 1' : 'Output 2';
+    return {
+      url: run ? this.mediaUrl(run.url) : null,
+      label: run ? run.title : 'Nothing here yet',
+      empty: id
+        ? 'That run is no longer in the list.'
+        : `Choose “${name}” under “Show result in”, then press Process image.`,
+      run,
+    };
+  }
+
+  setSlot(key: WindowKey, value: string): void {
+    this.slots[key] = value;
+  }
+
+  toggleFullscreen(win: HTMLElement): void {
+    if (document.fullscreenElement === win) {
+      void document.exitFullscreen();
+      return;
+    }
+    if (!win.requestFullscreen) {
+      this.error = 'Full screen is not supported in this browser.';
+      return;
+    }
+    win.requestFullscreen().catch(() => {
+      this.error = 'Could not enter full screen.';
+    });
+  }
+
+  /** Fires on enter/exit, including when the user leaves with Esc. */
+  @HostListener('document:fullscreenchange')
+  onFullscreenChange(): void {
+    this.fullscreenEl = document.fullscreenElement;
+  }
+
+  canFurther(run: RunEntry | null): boolean {
+    return !!run && !run.isChart && !this.loading && !this.furthering;
+  }
+
+  /** Make a result the input image, so another operation can be applied to it. */
+  async further(run: RunEntry | null): Promise<void> {
+    const url = run ? this.mediaUrl(run.url) : null;
+    if (!run || !url || !this.canFurther(run)) {
+      return;
+    }
+    this.furthering = true;
+    this.error = null;
+    try {
+      const blob = await this.fetchBlob(url);
+      const ext = (url.split('?')[0].match(/\.(png|jpe?g|bmp|webp|tiff?)$/i)?.[1] ?? 'png').toLowerCase();
+      // Short client-side name: the backend prefixes names on every pass, so reusing
+      // the server filename would eventually hit the filesystem limit.
+      this.chainStep += 1;
+      const file = new File([blob], `further_${this.chainStep}.${ext}`, {
+        type: blob.type || `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+      });
+      this.setPrimary(file);
+      this.info = `${run.title} is now the input image. Pick an operation and press Process.`;
+    } catch {
+      this.error = 'Could not load that result to use it as the input.';
+    } finally {
+      this.furthering = false;
+    }
+  }
+
+  async download(key: WindowKey): Promise<void> {
+    const v = this.view(key);
+    if (!v.url) {
+      return;
+    }
+    try {
+      const blob = await this.fetchBlob(v.url);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${v.label.replace(/[^\w]+/g, '_').replace(/^_|_$/g, '') || 'image'}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      this.error = 'Download failed.';
+    }
+  }
+
+  // ---- snake drawing dialog ----
+  openDraw(): void {
+    if (!this.primaryPreview) {
+      this.error = 'Upload Image 1 first.';
+      return;
+    }
+    this.draft = this.contour.map((p) => [...p] as [number, number]);
+    this.drawOpen = true;
+  }
+
+  onDrawImgLoad(ev: Event): void {
+    const img = ev.target as HTMLImageElement;
+    this.imgW = img.naturalWidth;
+    this.imgH = img.naturalHeight;
+  }
+
+  get marker(): number {
+    return Math.max(2, this.imgW / 180);
+  }
+
+  get polyPoints(): string {
+    return this.draft.map((p) => p.join(',')).join(' ');
+  }
+
+  private toImageXY(ev: PointerEvent): [number, number] {
+    const r = (ev.currentTarget as SVGSVGElement).getBoundingClientRect();
+    const x = Math.min(this.imgW - 1, Math.max(0, ((ev.clientX - r.left) * this.imgW) / r.width));
+    const y = Math.min(this.imgH - 1, Math.max(0, ((ev.clientY - r.top) * this.imgH) / r.height));
+    return [Math.round(x), Math.round(y)];
+  }
+
+  /** Each click adds a point; points are joined in order and the shape closes automatically. */
+  onDrawDown(ev: PointerEvent): void {
+    this.draft.push(this.toImageXY(ev));
+  }
+
+  undoPoint(): void {
+    this.draft.pop();
+  }
+
+  clearDraft(): void {
+    this.draft = [];
+  }
+
+  cancelDraw(): void {
+    this.drawOpen = false;
+  }
+
+  confirmDraw(): void {
+    if (this.draft.length < 3) {
+      return;
+    }
+    this.contour = this.draft;
+    this.drawOpen = false;
+    this.info = this.showSnake
+      ? `Initial contour set (${this.contour.length} clicked points). It will be resampled to ${this.params.snake_points} points.`
+      : `Contour set (${this.contour.length} clicked points).`;
+  }
+
+  // ---- inputs ----
+  onOperationChange(): void {
+    this.params.filter_type = this.selectedOperation;
+    if (this.showSnake) {
+      this.params.sigma = 2; // smoothing the snake's image energy works best around 2
+    }
+    this.chainCode = null;
+    if (!this.showImage2) {
+      this.inputTab = 1;
+    }
+    this.error = null;
+    this.info = null;
+  }
+
+  onPrimarySelected(event: Event): void {
+    const file = (event.target as HTMLInputElement).files?.[0] ?? null;
+    this.chainStep = 0;
+    this.contour = [];
+    this.setPrimary(file, false);
+  }
+
+  onSecondarySelected(event: Event): void {
+    const file = (event.target as HTMLInputElement).files?.[0] ?? null;
+    this.secondaryFile = file;
+    this.revokePreview(this.secondaryPreview);
+    this.secondaryPreview = file ? URL.createObjectURL(file) : null;
+    this.secondaryId = null;
+    this.secondaryUpload = file
+      ? this.upload(file).then((id) => {
+          if (this.secondaryFile === file) {
+            this.secondaryId = id;
+          }
+          return id;
+        })
+      : null;
+  }
+
+  async process(): Promise<void> {
+    if (!this.primaryFile) {
+      this.error = 'Upload Image 1 first.';
+      return;
+    }
+    if (this.op === 'hybrid' && !this.secondaryFile) {
+      this.error = 'Hybrid mode needs a second image.';
+      return;
+    }
+    if (this.showSiftMatch && !this.secondaryFile) {
+      this.error = 'Feature matching needs a second image (Image 2).';
+      return;
+    }
+    if (this.needsContour && this.contour.length < 3) {
+      this.error = 'Draw the initial contour first.';
+      return;
+    }
+
+    this.loading = true;
+    const primaryFile: File = this.primaryFile;
+    const secondaryFile = this.secondaryFile;
+    // Usually already uploaded when the file was picked; otherwise this just awaits that upload.
+    const primaryId = this.primaryId ?? (await this.primaryUpload);
+    const secondaryId = secondaryFile ? (this.secondaryId ?? (await this.secondaryUpload)) : null;
+
+    const form = new FormData();
+    if (primaryId) {
+      form.append('image_id', primaryId);
+    } else {
+      form.append('image', primaryFile); // upload failed or unavailable: fall back to sending the file
+    }
+    if (secondaryFile) {
+      if (secondaryId) {
+        form.append('image_2_id', secondaryId);
+      } else {
+        form.append('image_2', secondaryFile);
+      }
+    }
+    form.append('filter_type', this.selectedOperation);
+    if (this.params.convert_gray) {
+      form.append('convert_gray', 'on');
+    }
+    if (this.showDrawOption && this.params.draw_on_image) {
+      form.append('draw_on_image', 'on');
+    }
+    if (this.showDetectPicker && this.anyDetection) {
+      form.append('detections', this.detectionsParam);
+    }
+    if (this.needsContour) {
+      form.append('snake_contour', JSON.stringify(this.contour));
+    }
+    if (this.op === 'snake') {
+      if (this.params.snake_sync) {
+        form.append('snake_sync', 'on');
+      }
+    }
+
+    const numericKeys: (keyof ProcessParams)[] = [
+      'kernel_size', 'sigma', 'canny_low', 'canny_high', 'thresh_val', 'iter_diff', 'local_win', 'local_c',
+      'noise_mean', 'noise_sigma', 'sp_amount', 'sp_salt_ratio', 'uniform_low', 'uniform_high',
+      'cutoff_low', 'cutoff_high', 'alpha', 'beta', 'hough_thresh',
+      'circle_r_min', 'circle_r_max', 'circle_ratio', 'circle_min_dist', 'circle_max',
+      'ellipse_a_min', 'ellipse_a_max', 'ellipse_b_min', 'ellipse_votes', 'ellipse_support', 'ellipse_max',
+      'snake_points', 'snake_alpha', 'snake_beta', 'snake_gamma', 'snake_iters', 'snake_radius',
+      'sift_ratio', 'sift_contrast', 'sift_edge_ratio', 'sift_max_size', 'sift_draw',
+    ];
+    for (const key of numericKeys) {
+      const value = this.params[key];
+      // An emptied number box is null: skip it so the backend falls back to its default.
+      if (value !== null && value !== undefined && String(value) !== '') {
+        form.append(key, String(value));
+      }
+    }
+
+    this.loading = true;
+    this.error = null;
+    this.info = null;
+    this.chainCode = null;
+    this.stats = null;
+    const opId = this.selectedOperation;
+
+    this.api.processImage(form).subscribe({
+      next: (res) => {
+        this.loading = false;
+        if (res.error) {
+          this.error = res.error;
+          return;
+        }
+        if (!res.processed_image) {
+          this.error = 'The backend returned no output image.';
+          return;
+        }
+        this.runCount += 1;
+        const label = this.operations.find((o) => o.id === opId)?.label ?? opId;
+        const id = `r${this.runCount}`;
+        this.slots[this.target] = id;
+        this.runs = [
+          {
+            id,
+            title: `#${this.runCount} ${label}`,
+            opId,
+            url: res.processed_image,
+            isChart: FIGURE_OPS.has(opId),
+          },
+          ...this.runs,
+        ].slice(0, MAX_RUNS);
+        this.info = res.info ?? null;
+        this.chainCode = res.chain_code ?? null;
+        this.stats = res.stats ?? null;
+      },
+      error: (err) => {
+        this.loading = false;
+        this.error = err.error?.error ?? 'Processing failed. Check the backend logs.';
+      },
+    });
+  }
+
+  mediaUrl(path: string | undefined): string | null {
+    return this.api.mediaUrl(path);
+  }
+
+  // ---- helpers ----
+  private setPrimary(file: File | null, syncInput = true): void {
+    this.primaryFile = file;
+    this.revokePreview(this.primaryPreview);
+    this.primaryPreview = file ? URL.createObjectURL(file) : null;
+    this.primaryId = null;
+    this.primaryUpload = file
+      ? this.upload(file).then((id) => {
+          if (this.primaryFile === file) {
+            this.primaryId = id;
+          }
+          return id;
+        })
+      : null;
+    if (file && syncInput) {
+      this.syncPrimaryInput(file);
+    }
+  }
+
+  /** Upload once; resolves to the server's image id, or null (then the file is sent with the request). */
+  private upload(file: File): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.uploads.upload(file).subscribe({
+        next: (res) => resolve(res.image_id ?? null),
+        error: (err) => {
+          console.warn('Image upload failed; the file will be sent with the request instead.', err);
+          resolve(null);
+        },
+      });
+    });
+  }
+
+  private async fetchBlob(url: string): Promise<Blob> {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    return resp.blob();
+  }
+
+  private groupByCategory(ops: CvOperation[]): { group: string; items: CvOperation[] }[] {
+    const map = new Map<string, CvOperation[]>();
+    for (const op of ops) {
+      const list = map.get(op.group) ?? [];
+      list.push(op);
+      map.set(op.group, list);
+    }
+    return Array.from(map.entries()).map(([group, items]) => ({ group, items }));
+  }
+
+  /** Make the file input display the promoted file instead of the old upload. */
+  private syncPrimaryInput(file: File): void {
+    const input = this.primaryInput?.nativeElement;
+    if (!input) {
+      return;
+    }
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+    } catch {
+      /* Older browsers: the preview and primaryFile are still correct. */
+    }
+  }
+
+  private revokePreview(url: string | null): void {
+    if (url) {
+      URL.revokeObjectURL(url);
+    }
+  }
+}

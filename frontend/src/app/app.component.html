@@ -1,0 +1,473 @@
+<div class="wrap">
+  <header class="top">
+    <h1>{{ title }}</h1>
+  </header>
+
+  @if (error) {
+    <p class="msg msg-err" role="alert">{{ error }}</p>
+  }
+  @if (info) {
+    <p class="msg msg-ok" role="status">{{ info }}</p>
+  }
+  @if (stats) {
+    <div class="stats" role="status">
+      <div><span>Perimeter</span><strong>{{ stats.perimeter }} px</strong></div>
+      <div><span>Area</span><strong>{{ stats.area }} px²</strong></div>
+      @if (stats.iterations !== undefined) {
+        <div><span>Iterations</span><strong>{{ stats.iterations }}</strong></div>
+      }
+      <div><span>Points</span><strong>{{ stats.points }}</strong></div>
+    </div>
+  }
+  @if (chainCode) {
+    <details class="msg msg-ok">
+      <summary>Chain code ({{ chainCode.length }} steps)</summary>
+      <textarea readonly rows="4" style="width:100%" [value]="chainCode"></textarea>
+    </details>
+  }
+
+  <div class="columns">
+    <!-- ============ controls ============ -->
+    <section class="box box-controls">
+      <h2>Controls</h2>
+
+      <label class="row">
+        <span class="lbl">Operation</span>
+        <select
+          [(ngModel)]="selectedOperation"
+          (ngModelChange)="onOperationChange()"
+          name="operation"
+        >
+          @for (group of groupedOperations; track group.group) {
+            <optgroup [label]="group.group">
+              @for (item of group.items; track item.id) {
+                <option [value]="item.id">{{ item.label }}</option>
+              }
+            </optgroup>
+          }
+        </select>
+      </label>
+
+      <label class="row">
+        <span class="lbl">Image 1</span>
+        <input #primaryInput type="file" accept="image/*" (change)="onPrimarySelected($event)" />
+      </label>
+
+      @if (showImage2) {
+        <label class="row">
+          <span class="lbl">{{ image2Label }}</span>
+          <input type="file" accept="image/*" (change)="onSecondarySelected($event)" />
+        </label>
+      }
+
+      @if (showGrayToggle) {
+        <label class="check">
+          <input type="checkbox" [(ngModel)]="params.convert_gray" name="convert_gray" />
+          Convert to grayscale first (manual rgb2gray)
+        </label>
+      }
+
+      <div class="params">
+        @if (showKernel) {
+          <label class="row half">
+            <span class="lbl">Kernel size</span>
+            <input type="number" [(ngModel)]="params.kernel_size" min="3" max="15" step="2" />
+          </label>
+        }
+        @if (showSigma) {
+          <label class="row half">
+            <span class="lbl">Sigma</span>
+            <input type="number" [(ngModel)]="params.sigma" min="0.1" max="10" step="0.1" />
+          </label>
+        }
+        @if (showCannyThresh) {
+          <label class="row half">
+            <span class="lbl">Lower threshold</span>
+            <input type="number" [(ngModel)]="params.canny_low" min="0" max="1000" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Upper threshold</span>
+            <input type="number" [(ngModel)]="params.canny_high" min="0" max="1000" step="1" />
+          </label>
+        }
+        @if (showDetectPicker) {
+          <fieldset class="row detect-picker">
+            <legend class="lbl">Detect on the edges</legend>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="detectLines" name="detect_lines" /> Lines
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="detectCircles" name="detect_circles" /> Circles
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="detectEllipses" name="detect_ellipses" /> Ellipses
+            </label>
+          </fieldset>
+        }
+        @if (showHough) {
+          <label class="row half">
+            <span class="lbl">Hough threshold (min votes)</span>
+            <input type="number" [(ngModel)]="params.hough_thresh" min="1" step="1" />
+          </label>
+        }
+        @if (showCircles) {
+          <label class="row half">
+            <span class="lbl">Min radius (px)</span>
+            <input type="number" [(ngModel)]="params.circle_r_min" min="1" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max radius (px)</span>
+            <input type="number" [(ngModel)]="params.circle_r_max" min="2" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Min support (0–1)</span>
+            <input type="number" [(ngModel)]="params.circle_ratio" min="0.05" max="1" step="0.05" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Min distance (px)</span>
+            <input type="number" [(ngModel)]="params.circle_min_dist" min="1" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max circles</span>
+            <input type="number" [(ngModel)]="params.circle_max" min="1" max="200" step="1" />
+          </label>
+        }
+        @if (showEllipses) {
+          <label class="row half">
+            <span class="lbl">Min semi-major (px)</span>
+            <input type="number" [(ngModel)]="params.ellipse_a_min" min="1" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max semi-major (px)</span>
+            <input type="number" [(ngModel)]="params.ellipse_a_max" min="2" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Min semi-minor (px)</span>
+            <input type="number" [(ngModel)]="params.ellipse_b_min" min="1" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Min centre votes</span>
+            <input type="number" [(ngModel)]="params.ellipse_votes" min="1" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Min outline support (0–1)</span>
+            <input type="number" [(ngModel)]="params.ellipse_support" min="0.1" max="1" step="0.05" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max ellipses</span>
+            <input type="number" [(ngModel)]="params.ellipse_max" min="1" max="100" step="1" />
+          </label>
+        }
+        @if (needsContour) {
+          <div class="row">
+            <button type="button" class="mini" (click)="openDraw()">{{ showSnake ? 'Draw initial contour' : 'Draw contour' }}</button>
+            <span class="meta">{{ contour.length ? contour.length + ' points drawn' : 'not drawn yet' }}</span>
+          </div>
+        }
+        @if (showSnake) {
+          <label class="row half">
+            <span class="lbl">Contour points (N)</span>
+            <input type="number" [(ngModel)]="params.snake_points" min="3" max="1000" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">α continuity</span>
+            <input type="number" [(ngModel)]="params.snake_alpha" min="0" step="0.1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">β curvature</span>
+            <input type="number" [(ngModel)]="params.snake_beta" min="0" step="0.1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">γ image</span>
+            <input type="number" [(ngModel)]="params.snake_gamma" min="0" step="0.1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max iterations</span>
+            <input type="number" [(ngModel)]="params.snake_iters" min="1" max="5000" step="10" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Search radius (px)</span>
+            <input type="number" [(ngModel)]="params.snake_radius" min="1" max="10" step="1" />
+          </label>
+          <label class="check">
+            <input type="checkbox" [(ngModel)]="params.snake_sync" name="snake_sync" />
+            Synchronous update (all points use the previous iteration)
+          </label>
+        }
+        @if (showDrawOption) {
+          <label class="check">
+            <input type="checkbox" [(ngModel)]="params.draw_on_image" name="draw_on_image" />
+            Draw {{ drawLabel }} on the original image
+          </label>
+        }
+        @if (showThresh) {
+          <label class="row half">
+            <span class="lbl">Threshold</span>
+            <input type="number" [(ngModel)]="params.thresh_val" min="0" max="255" step="1" />
+          </label>
+        }
+        @if (showIterDiff) {
+          <label class="row half">
+            <span class="lbl">Iter. tolerance</span>
+            <input type="number" [(ngModel)]="params.iter_diff" min="0.0001" step="0.001" />
+          </label>
+        }
+        @if (showLocal) {
+          <label class="row half">
+            <span class="lbl">Window size</span>
+            <input type="number" [(ngModel)]="params.local_win" min="3" max="51" step="2" />
+          </label>
+          <label class="row half">
+            <span class="lbl">C</span>
+            <input type="number" [(ngModel)]="params.local_c" step="0.5" />
+          </label>
+        }
+        @if (showNoise) {
+          <label class="row half">
+            <span class="lbl">Noise mean</span>
+            <input type="number" [(ngModel)]="params.noise_mean" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Noise std</span>
+            <input type="number" [(ngModel)]="params.noise_sigma" min="1" max="150" step="1" />
+          </label>
+        }
+        @if (showSaltPepper) {
+          <label class="row half">
+            <span class="lbl">Amount</span>
+            <input type="number" [(ngModel)]="params.sp_amount" min="0" max="1" step="0.01" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Salt ratio</span>
+            <input type="number" [(ngModel)]="params.sp_salt_ratio" min="0" max="1" step="0.05" />
+          </label>
+        }
+        @if (showUniform) {
+          <label class="row half">
+            <span class="lbl">Low</span>
+            <input type="number" [(ngModel)]="params.uniform_low" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">High</span>
+            <input type="number" [(ngModel)]="params.uniform_high" step="1" />
+          </label>
+        }
+        @if (showCutoffLow) {
+          <label class="row half">
+            <span class="lbl">Low-pass D0</span>
+            <input type="number" [(ngModel)]="params.cutoff_low" min="1" max="500" step="1" />
+          </label>
+        }
+        @if (showCutoffHigh) {
+          <label class="row half">
+            <span class="lbl">High-pass D0</span>
+            <input type="number" [(ngModel)]="params.cutoff_high" min="1" max="500" step="1" />
+          </label>
+        }
+        @if (showSiftThresholds) {
+          <label class="row half">
+            <span class="lbl">Contrast threshold</span>
+            <input type="number" [(ngModel)]="params.sift_contrast" min="0.001" max="0.1" step="0.001" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Edge ratio (r)</span>
+            <input type="number" [(ngModel)]="params.sift_edge_ratio" min="2" max="50" step="1" />
+          </label>
+        }
+        @if (showSift) {
+          <label class="row half">
+            <span class="lbl">Max image size (px)</span>
+            <input type="number" [(ngModel)]="params.sift_max_size" min="64" max="1000" step="50" />
+          </label>
+        }
+        @if (showSiftMatch) {
+          <label class="row half">
+            <span class="lbl">Ratio test (0–1)</span>
+            <input type="number" [(ngModel)]="params.sift_ratio" min="0.1" max="1" step="0.05" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Matches to draw</span>
+            <input type="number" [(ngModel)]="params.sift_draw" min="1" max="500" step="10" />
+          </label>
+          <p class="meta">Image 1 is matched against Image 2. Run SSD in one output and NCC in the other to compare them.</p>
+        }
+        @if (showHybridWeights) {
+          <label class="row half">
+            <span class="lbl">Alpha</span>
+            <input type="number" [(ngModel)]="params.alpha" min="0" max="2" step="0.05" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Beta</span>
+            <input type="number" [(ngModel)]="params.beta" min="0" max="2" step="0.05" />
+          </label>
+        }
+      </div>
+
+      <fieldset class="target">
+        <legend>Show result in</legend>
+        <label>
+          <input type="radio" name="target" value="out1" [(ngModel)]="target" />
+          <span>Output 1</span>
+        </label>
+        <label>
+          <input type="radio" name="target" value="out2" [(ngModel)]="target" />
+          <span>Output 2</span>
+        </label>
+      </fieldset>
+
+      <button type="button" class="submit" (click)="process()" [disabled]="loading">
+        {{ loading ? 'Working…' : 'Process image' }}
+      </button>
+    </section>
+
+    <!-- ============ 1 input + 2 outputs ============ -->
+    <section class="views">
+      <!-- input window -->
+      <article class="win" #win>
+        <header class="win-head">
+          <h3>Input</h3>
+          <div class="head-tools">
+            @if (showImage2) {
+              <div class="tabs" role="group" aria-label="Input image">
+                <button type="button" [class.on]="inputTab === 1" (click)="inputTab = 1">Image 1</button>
+                <button type="button" [class.on]="inputTab === 2" (click)="inputTab = 2">Image 2</button>
+              </div>
+            }
+            <button
+              type="button"
+              class="fs"
+              (click)="toggleFullscreen(win)"
+              [attr.aria-label]="fullscreenEl === win ? 'Exit full screen' : 'Full screen'"
+              [title]="fullscreenEl === win ? 'Exit full screen (Esc)' : 'Full screen'"
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square">
+                @if (fullscreenEl === win) {
+                  <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+                } @else {
+                  <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
+                }
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div class="stage" [appZoomPan]="inputUrl" title="Scroll to zoom, drag to pan, double-click to reset">
+          @if (inputUrl) {
+            <img [src]="inputUrl" alt="Input image" />
+          } @else {
+            <p class="blank">Choose {{ inputTab === 2 ? 'Image 2' : 'Image 1' }} in Controls.</p>
+          }
+        </div>
+        <footer class="win-foot">
+          <span class="meta">
+            {{ inputTab === 2 ? (secondaryFile?.name ?? '') : chainStep > 0 ? 'Previous output' : (primaryFile?.name ?? '') }}
+          </span>
+        </footer>
+      </article>
+
+      <!-- output windows -->
+      @for (key of outputKeys; track key) {
+        @if (view(key); as v) {
+          <article class="win win-out" #win>
+            <header class="win-head">
+              <h3>{{ key === 'out1' ? 'Output 1' : 'Output 2' }}</h3>
+              <div class="head-tools">
+                <select
+                  class="pick"
+                  [attr.aria-label]="'What ' + (key === 'out1' ? 'Output 1' : 'Output 2') + ' shows'"
+                  [ngModel]="slots[key]"
+                  (ngModelChange)="setSlot(key, $event)"
+                  [name]="'slot_' + key"
+                >
+                  <option value="">Empty</option>
+                  @for (r of runs; track r.id) {
+                    <option [value]="r.id">{{ r.title }}</option>
+                  }
+                </select>
+                <button
+                  type="button"
+                  class="fs"
+                  (click)="toggleFullscreen(win)"
+                  [attr.aria-label]="fullscreenEl === win ? 'Exit full screen' : 'Full screen'"
+                  [title]="fullscreenEl === win ? 'Exit full screen (Esc)' : 'Full screen'"
+                >
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square">
+                @if (fullscreenEl === win) {
+                  <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+                } @else {
+                  <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
+                }
+              </svg>
+                </button>
+              </div>
+            </header>
+
+            <div class="stage" [appZoomPan]="v.url" title="Scroll to zoom, drag to pan, double-click to reset">
+              @if (v.url) {
+                <img [src]="v.url" [alt]="v.label" />
+              } @else {
+                <p class="blank">{{ v.empty }}</p>
+              }
+              @if (loading && target === key) {
+                <div class="busy"><span class="spin"></span>Working…</div>
+              }
+            </div>
+
+            <footer class="win-foot">
+              <span class="meta" [title]="v.label">{{ v.label }}</span>
+              <button type="button" class="mini" (click)="download(key)" [disabled]="!v.url">Save</button>
+              <button
+                type="button"
+                class="further"
+                (click)="further(v.run)"
+                [disabled]="!canFurther(v.run)"
+                [title]="
+                  v.run?.isChart
+                    ? 'This output is a chart/figure and cannot be processed further'
+                    : 'Use this output as the input image for another operation'
+                "
+              >
+                {{ furthering ? 'Loading…' : 'Further' }}
+                <span class="arrow" aria-hidden="true">&rarr;</span>
+              </button>
+            </footer>
+          </article>
+        }
+      }
+    </section>
+  </div>
+
+@if (drawOpen) {
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <header class="modal-head">
+        <strong>Draw the initial contour around the object</strong>
+      </header>
+      <p class="meta">Click around the object to add points in order. The points are joined by lines and the shape closes automatically.</p>
+
+      <div class="draw-wrap">
+        <img [src]="primaryPreview" alt="Image to outline" (load)="onDrawImgLoad($event)" draggable="false" />
+        <svg
+          [attr.viewBox]="'0 0 ' + imgW + ' ' + imgH"
+          preserveAspectRatio="none"
+          (pointerdown)="onDrawDown($event)"
+        >
+          @if (draft.length > 1) {
+            <polygon [attr.points]="polyPoints" fill="rgba(255,255,0,0.12)" stroke="yellow" [attr.stroke-width]="marker * 0.6" />
+          }
+          @for (p of draft; track $index) {
+            <circle [attr.cx]="p[0]" [attr.cy]="p[1]" [attr.r]="marker" fill="red" />
+          }
+        </svg>
+      </div>
+
+      <footer class="modal-foot">
+        <span class="meta">{{ draft.length }} points</span>
+        <button type="button" class="mini" (click)="undoPoint()" [disabled]="!draft.length">Undo</button>
+        <button type="button" class="mini" (click)="clearDraft()" [disabled]="!draft.length">Clear</button>
+        <button type="button" class="mini" (click)="cancelDraw()">Cancel</button>
+        <button type="button" class="submit" (click)="confirmDraw()" [disabled]="draft.length < 3">Use contour</button>
+      </footer>
+    </div>
+  </div>
+}
+</div>
