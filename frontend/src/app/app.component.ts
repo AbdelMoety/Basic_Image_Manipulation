@@ -27,14 +27,19 @@ const AUTO_GRAY_OPS = new Set([
   'sift_keypoints',
   'sift_match_ssd',
   'sift_match_ncc',
+  'harris',
+  'lambda_minus',
 ]);
 
 /** SIFT works on grayscale; the conversion happens on the server. */
 const SIFT_OPS = new Set(['sift_scale_space', 'sift_keypoints', 'sift_match_ssd', 'sift_match_ncc']);
 const SIFT_MATCH_OPS = new Set(['sift_match_ssd', 'sift_match_ncc']);
 
+/** Corner detectors: grayscale conversion and resizing happen on the server. */
+const CORNER_OPS = new Set(['harris', 'lambda_minus']);
+
 /** Outputs that are annotated figures/charts: viewable and savable, but not reusable as an input. */
-const FIGURE_OPS = new Set(['plot_histograms', ...SIFT_OPS]);
+const FIGURE_OPS = new Set(['plot_histograms', ...SIFT_OPS, ...CORNER_OPS]);
 
 const MAX_RUNS = 30;
 
@@ -107,6 +112,12 @@ export class AppComponent implements OnInit {
     sift_edge_ratio: 10,
     sift_max_size: 400,
     sift_draw: 60,
+    harris_k: 0.04,
+    harris_thresh: 0.01,
+    lm_thresh: 0.1,
+    corner_sigma: 1.5,
+    corner_radius: 5,
+    corner_max_size: 400,
   };
 
   /** Shapes to detect on the Manual Canny edge map (any combination, or none). */
@@ -189,6 +200,15 @@ export class AppComponent implements OnInit {
   /** Scale space & DoG only visualise the pyramid, so the keypoint thresholds don't apply. */
   get showSiftThresholds(): boolean {
     return this.showSift && this.op !== 'sift_scale_space';
+  }
+  get showCorner(): boolean {
+    return CORNER_OPS.has(this.op);
+  }
+  get showHarris(): boolean {
+    return this.op === 'harris';
+  }
+  get showLambdaMinus(): boolean {
+    return this.op === 'lambda_minus';
   }
   get showKernel(): boolean {
     return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny'].includes(this.op);
@@ -278,7 +298,7 @@ export class AppComponent implements OnInit {
       this.showKernel || this.showSigma || this.showCannyThresh || this.showThresh ||
       this.showIterDiff || this.showLocal || this.showNoise || this.showSaltPepper ||
       this.showHough || this.showCircles || this.showEllipses || this.needsContour || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
-      this.showSift || this.showGrayToggle
+      this.showSift || this.showCorner || this.showGrayToggle
     );
   }
 
@@ -533,6 +553,7 @@ export class AppComponent implements OnInit {
       'ellipse_a_min', 'ellipse_a_max', 'ellipse_b_min', 'ellipse_votes', 'ellipse_support', 'ellipse_max',
       'snake_points', 'snake_alpha', 'snake_beta', 'snake_gamma', 'snake_iters', 'snake_radius',
       'sift_ratio', 'sift_contrast', 'sift_edge_ratio', 'sift_max_size', 'sift_draw',
+      'harris_k', 'harris_thresh', 'lm_thresh', 'corner_sigma', 'corner_radius', 'corner_max_size',
     ];
     for (const key of numericKeys) {
       const value = this.params[key];

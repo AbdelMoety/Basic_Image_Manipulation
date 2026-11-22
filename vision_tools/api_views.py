@@ -74,6 +74,16 @@ OPERATIONS = [
         "group": "Edge Detection",
     },
     {
+        "id": "harris",
+        "label": "Harris Corner Detection (Manual)",
+        "group": "Corner Detection",
+    },
+    {
+        "id": "lambda_minus",
+        "label": "Lambda-minus Corner Detection (Manual)",
+        "group": "Corner Detection",
+    },
+    {
         "id": "snake",
         "label": "Active Contour / Snake (Greedy)",
         "group": "Segmentation & Active Contour",

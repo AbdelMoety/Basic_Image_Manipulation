@@ -17,6 +17,12 @@ export interface ProcessResult {
 export interface ProcessParams {
   filter_type: string;
   convert_gray: boolean;
+  harris_k: number;
+  harris_thresh: number;
+  lm_thresh: number;
+  corner_sigma: number;
+  corner_radius: number;
+  corner_max_size: number;
   kernel_size: number;
   sigma: number;
   hough_thresh: number;

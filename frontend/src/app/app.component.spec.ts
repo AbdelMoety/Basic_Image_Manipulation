@@ -167,6 +167,30 @@ describe('AppComponent', () => {
       await done;
     });
 
+    describe('corner detection (Harris / lambda-minus)', () => {
+      it('shows the right controls and hides the gray toggle', () => {
+        app.selectedOperation = 'harris';
+        app.onOperationChange();
+        expect(app.showCorner).toBe(true);
+        expect(app.showHarris).toBe(true);
+        expect(app.showLambdaMinus).toBe(false);
+        expect(app.showGrayToggle).toBe(false);
+        app.selectedOperation = 'lambda_minus';
+        expect(app.showHarris).toBe(false);
+        expect(app.showLambdaMinus).toBe(true);
+        app.selectedOperation = 'sobel';
+        expect(app.showCorner).toBe(false);
+      });
+
+      it('has the notebook defaults', () => {
+        expect(app.params.harris_k).toBe(0.04);
+        expect(app.params.harris_thresh).toBe(0.01);
+        expect(app.params.lm_thresh).toBe(0.1);
+        expect(app.params.corner_sigma).toBe(1.5);
+        expect(app.params.corner_radius).toBe(5);
+      });
+    });
+
     describe('SIFT feature matching section', () => {
       const pickSecond = (name = 'second.png') => {
         const file = new File([new Uint8Array([4, 5, 6])], name, { type: 'image/png' });

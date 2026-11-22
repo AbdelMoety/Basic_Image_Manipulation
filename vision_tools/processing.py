@@ -10,6 +10,7 @@ from . import image_store
 from . import sift
 
 VALID_DETECTIONS = ("lines", "circles", "ellipses")
+CORNER_OPS = ("harris", "lambda_minus")
 SIFT_OPS = ("sift_scale_space", "sift_keypoints", "sift_match_ssd", "sift_match_ncc")
 
 
@@ -115,6 +116,12 @@ def process_image_upload(request_files, request_post):
     sift_edge_ratio = float(request_post.get("sift_edge_ratio") or 10)
     sift_max_size = int(float(request_post.get("sift_max_size") or 400))
     sift_draw = int(float(request_post.get("sift_draw") or 60))
+    harris_k = float(request_post.get("harris_k") or 0.04)
+    harris_thresh = float(request_post.get("harris_thresh") or 0.01)
+    lm_thresh = float(request_post.get("lm_thresh") or 0.10)
+    corner_sigma = float(request_post.get("corner_sigma") or 1.5)
+    corner_radius = int(float(request_post.get("corner_radius") or 5))
+    corner_max_size = int(float(request_post.get("corner_max_size") or 400))
 
     if kernel_size < 3:
         kernel_size = 3
@@ -467,6 +474,48 @@ def process_image_upload(request_files, request_post):
                 if not len(kps1) or not len(kps2):
                     parts.append("an image has no keypoints: try a lower contrast threshold")
                 context["info"] = " | ".join(parts)
+
+        elif operation in CORNER_OPS:
+            if corner_sigma <= 0:
+                raise ValueError("Window sigma must be greater than 0.")
+            if corner_radius < 1:
+                raise ValueError("Non-max suppression radius must be at least 1.")
+            if corner_max_size < 64:
+                raise ValueError("Max image size: need at least 64px.")
+            thresh = harris_thresh if operation == "harris" else lm_thresh
+            if not 0 < thresh <= 1:
+                raise ValueError("Threshold must be in (0, 1].")
+
+            # Exactly the notebook's preprocess(): gray -> shrink only -> Gaussian blur -> float64
+            gray = utils.corner_preprocess(img1, corner_max_size, 1.0)
+
+            # Computation time = response map + threshold + non-max suppression
+            # (excludes upload, grayscale/resize/blur preprocessing and drawing).
+            if operation == "harris":
+                color, name = (255, 0, 0), "Harris"
+                extra = f"k = {harris_k:g}, "
+                t0 = time.perf_counter()
+                response = utils.harris_response(gray, k=harris_k, window_sigma=corner_sigma)
+                t_resp = time.perf_counter() - t0
+            else:
+                color, name = (0, 255, 0), "λ₋"
+                extra = ""
+                t0 = time.perf_counter()
+                response = utils.lambda_minus_response(gray, window_sigma=corner_sigma)
+                t_resp = time.perf_counter() - t0
+            t1 = time.perf_counter()
+            rows, cols = utils.find_corners(response, threshold=thresh, radius=corner_radius)
+            t_nms = time.perf_counter() - t1
+            t_total = t_resp + t_nms
+            context["time_ms"] = round(t_total * 1000, 2)
+            result_img = cv2.cvtColor(utils.draw_corners(gray, rows, cols, color), cv2.COLOR_RGB2BGR)
+            context["info"] = (
+                f"{name} corners — {len(rows)} found in {t_total * 1000:.1f} ms "
+                f"(response {t_resp * 1000:.1f} ms + NMS {t_nms * 1000:.1f} ms) ({extra}window σ = {corner_sigma:g}, "
+                f"threshold {thresh * 100:g}% of max, NMS radius {corner_radius}px, "
+                f"image {gray.shape[1]}×{gray.shape[0]}px)"
+                + ("" if len(rows) else " — none found: try a lower threshold")
+            )
 
         elif operation == "threshold":
             result_img = utils.threshold_img(img1_work, threshold=thresh_val)

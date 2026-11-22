@@ -1255,3 +1255,117 @@ def snake_segmentation(image, contour_xy, n_points, alpha, beta, gamma, max_iter
         "smoothed": smooth, "start": start, "chain": chain,
         "perimeter": calculate_perimeter(chain), "area": calculate_area(final),
     }
+
+# ==========================================
+# 8. Corner Detection (Harris & Lambda-minus)
+# Ported line-for-line from Manual_Corner_Detection_Harris_LambdaMinus.ipynb
+# ==========================================
+
+def corner_preprocess(img, max_size=400, blur_sigma=1.0):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    h, w = gray.shape
+    scale = max_size / max(h, w)
+    if scale < 1:                                   # only shrink, never enlarge
+        gray = cv2.resize(gray, (int(w * scale), int(h * scale)))
+
+    if blur_sigma > 0:
+        gray = cv2.GaussianBlur(gray, (0, 0), blur_sigma)
+
+    return gray.astype(np.float64)
+
+
+def filter2d(image, kernel):
+    kh, kw = kernel.shape
+    pad_y, pad_x = kh // 2, kw // 2
+    padded = np.pad(image, ((pad_y, pad_y), (pad_x, pad_x)), mode="reflect")
+
+    H, W = image.shape
+    result = np.zeros((H, W))
+
+    for dy in range(kh):
+        for dx in range(kw):
+            result += kernel[dy, dx] * padded[dy:dy + H, dx:dx + W]
+
+    return result
+
+
+sobel_x = np.array([[-1, 0, 1],
+                    [-2, 0, 2],
+                    [-1, 0, 1]]) / 8.0
+sobel_y = sobel_x.T
+
+
+def gaussian_kernel(sigma):
+    size = 2 * int(np.ceil(3 * sigma)) + 1
+    r = np.arange(size) - size // 2
+    x, y = np.meshgrid(r, r)
+    kernel = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+    return kernel / kernel.sum()                   # weights add up to 1
+
+
+def structure_tensor(gray, window_sigma=1.5):
+    Ix = filter2d(gray, sobel_x)
+    Iy = filter2d(gray, sobel_y)
+    window = gaussian_kernel(window_sigma)
+
+    Sxx = filter2d(Ix * Ix, window)
+    Syy = filter2d(Iy * Iy, window)
+    Sxy = filter2d(Ix * Iy, window)
+    return Sxx, Syy, Sxy
+
+
+def eigenvalues(Sxx, Syy, Sxy):
+    middle = (Sxx + Syy) / 2
+    spread = np.sqrt(((Sxx - Syy) / 2) ** 2 + Sxy ** 2)
+    lam_big = middle + spread
+    lam_small = middle - spread
+    return lam_big, lam_small
+
+
+def harris_response(gray, k=0.04, window_sigma=1.5):
+    Sxx, Syy, Sxy = structure_tensor(gray, window_sigma)
+    det = Sxx * Syy - Sxy ** 2
+    trace = Sxx + Syy
+    return det - k * trace ** 2
+
+
+def lambda_minus_response(gray, window_sigma=1.5):
+    Sxx, Syy, Sxy = structure_tensor(gray, window_sigma)
+    lam_big, lam_small = eigenvalues(Sxx, Syy, Sxy)
+    return lam_small
+
+
+def local_max(R, radius):
+    """For every pixel: the biggest value in the box around it."""
+    padded = np.pad(R, radius, mode="constant", constant_values=-np.inf)
+    H, W = R.shape
+    best = np.full((H, W), -np.inf)
+
+    for dy in range(2 * radius + 1):
+        for dx in range(2 * radius + 1):
+            best = np.maximum(best, padded[dy:dy + H, dx:dx + W])
+    return best
+
+
+def find_corners(R, threshold=0.01, radius=5):
+    strong = R > threshold * R.max()
+    peak = R == local_max(R, radius)
+    corners = strong & peak
+
+    # ignore the image border
+    corners[:radius, :] = False
+    corners[-radius:, :] = False
+    corners[:, :radius] = False
+    corners[:, -radius:] = False
+
+    rows, cols = np.nonzero(corners)
+    return rows, cols
+
+
+def draw_corners(gray, rows, cols, color):
+    """Notebook drawing; `color` is RGB and the result is an RGB canvas."""
+    canvas = cv2.cvtColor(gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+    for r, c in zip(rows, cols):
+        cv2.circle(canvas, (int(c), int(r)), 4, color, 1)
+    return canvas

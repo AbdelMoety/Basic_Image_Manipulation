@@ -291,6 +291,36 @@
           </label>
           <p class="meta">Image 1 is matched against Image 2. Run SSD in one output and NCC in the other to compare them.</p>
         }
+        @if (showCorner) {
+          <label class="row half">
+            <span class="lbl">Window σ</span>
+            <input type="number" [(ngModel)]="params.corner_sigma" min="0.5" max="10" step="0.5" />
+          </label>
+          @if (showHarris) {
+            <label class="row half">
+              <span class="lbl">Harris k</span>
+              <input type="number" [(ngModel)]="params.harris_k" min="0.01" max="0.2" step="0.01" />
+            </label>
+            <label class="row half">
+              <span class="lbl">Threshold (0–1 of max)</span>
+              <input type="number" [(ngModel)]="params.harris_thresh" min="0.001" max="1" step="0.005" />
+            </label>
+          }
+          @if (showLambdaMinus) {
+            <label class="row half">
+              <span class="lbl">Threshold (0–1 of max)</span>
+              <input type="number" [(ngModel)]="params.lm_thresh" min="0.01" max="1" step="0.01" />
+            </label>
+          }
+          <label class="row half">
+            <span class="lbl">NMS radius (px)</span>
+            <input type="number" [(ngModel)]="params.corner_radius" min="1" max="30" step="1" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Max image size (px)</span>
+            <input type="number" [(ngModel)]="params.corner_max_size" min="64" max="1000" step="50" />
+          </label>
+        }
         @if (showHybridWeights) {
           <label class="row half">
             <span class="lbl">Alpha</span>
