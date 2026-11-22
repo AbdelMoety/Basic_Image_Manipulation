@@ -55,6 +55,11 @@ export interface ProcessParams {
   snake_iters: number;
   snake_radius: number;
   snake_sync: boolean;
+  sift_ratio: number;
+  sift_contrast: number;
+  sift_edge_ratio: number;
+  sift_max_size: number;
+  sift_draw: number;
 }
 
 /** The two output windows. */
@@ -67,7 +72,7 @@ export interface RunEntry {
   opId: string;
   /** Path/URL returned by the backend (pass through mediaUrl() before use). */
   url: string;
-  /** Charts (histograms) can be viewed but not fed back in as an input image. */
+  /** Charts and figures (histograms, SIFT views) can be viewed but not fed back in as an input image. */
   isChart: boolean;
 }
 

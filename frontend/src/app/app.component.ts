@@ -23,7 +23,18 @@ const AUTO_GRAY_OPS = new Set([
   'manual_canny',
   'snake',
   'contour_measure',
+  'sift_scale_space',
+  'sift_keypoints',
+  'sift_match_ssd',
+  'sift_match_ncc',
 ]);
+
+/** SIFT works on grayscale; the conversion happens on the server. */
+const SIFT_OPS = new Set(['sift_scale_space', 'sift_keypoints', 'sift_match_ssd', 'sift_match_ncc']);
+const SIFT_MATCH_OPS = new Set(['sift_match_ssd', 'sift_match_ncc']);
+
+/** Outputs that are annotated figures/charts: viewable and savable, but not reusable as an input. */
+const FIGURE_OPS = new Set(['plot_histograms', ...SIFT_OPS]);
 
 const MAX_RUNS = 30;
 
@@ -91,6 +102,11 @@ export class AppComponent implements OnInit {
     snake_iters: 300,
     snake_radius: 1,
     snake_sync: true,
+    sift_ratio: 0.8,
+    sift_contrast: 0.01,
+    sift_edge_ratio: 10,
+    sift_max_size: 400,
+    sift_draw: 60,
   };
 
   /** Shapes to detect on the Manual Canny edge map (any combination, or none). */
@@ -157,7 +173,22 @@ export class AppComponent implements OnInit {
     return !AUTO_GRAY_OPS.has(this.op);
   }
   get showImage2(): boolean {
-    return this.op === 'hybrid';
+    return this.op === 'hybrid' || this.showSiftMatch;
+  }
+  get image2Label(): string {
+    return this.showSiftMatch ? 'Image 2 (to match)' : 'Image 2 (hybrid)';
+  }
+  /** Every SIFT operation shares the keypoint-detection settings. */
+  get showSift(): boolean {
+    return SIFT_OPS.has(this.op);
+  }
+  /** Matching operations also need Image 2, the ratio test and the number of matches to draw. */
+  get showSiftMatch(): boolean {
+    return SIFT_MATCH_OPS.has(this.op);
+  }
+  /** Scale space & DoG only visualise the pyramid, so the keypoint thresholds don't apply. */
+  get showSiftThresholds(): boolean {
+    return this.showSift && this.op !== 'sift_scale_space';
   }
   get showKernel(): boolean {
     return ['mean', 'gaussian', 'median', 'auto_canny', 'manual_canny'].includes(this.op);
@@ -247,7 +278,7 @@ export class AppComponent implements OnInit {
       this.showKernel || this.showSigma || this.showCannyThresh || this.showThresh ||
       this.showIterDiff || this.showLocal || this.showNoise || this.showSaltPepper ||
       this.showHough || this.showCircles || this.showEllipses || this.needsContour || this.showUniform || this.showCutoffLow || this.showCutoffHigh || this.showHybridWeights ||
-      this.showGrayToggle
+      this.showSift || this.showGrayToggle
     );
   }
 
@@ -446,6 +477,10 @@ export class AppComponent implements OnInit {
       this.error = 'Hybrid mode needs a second image.';
       return;
     }
+    if (this.showSiftMatch && !this.secondaryFile) {
+      this.error = 'Feature matching needs a second image (Image 2).';
+      return;
+    }
     if (this.needsContour && this.contour.length < 3) {
       this.error = 'Draw the initial contour first.';
       return;
@@ -497,6 +532,7 @@ export class AppComponent implements OnInit {
       'circle_r_min', 'circle_r_max', 'circle_ratio', 'circle_min_dist', 'circle_max',
       'ellipse_a_min', 'ellipse_a_max', 'ellipse_b_min', 'ellipse_votes', 'ellipse_support', 'ellipse_max',
       'snake_points', 'snake_alpha', 'snake_beta', 'snake_gamma', 'snake_iters', 'snake_radius',
+      'sift_ratio', 'sift_contrast', 'sift_edge_ratio', 'sift_max_size', 'sift_draw',
     ];
     for (const key of numericKeys) {
       const value = this.params[key];
@@ -534,7 +570,7 @@ export class AppComponent implements OnInit {
             title: `#${this.runCount} ${label}`,
             opId,
             url: res.processed_image,
-            isChart: opId === 'plot_histograms',
+            isChart: FIGURE_OPS.has(opId),
           },
           ...this.runs,
         ].slice(0, MAX_RUNS);

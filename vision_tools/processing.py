@@ -1,13 +1,16 @@
 import os
 import json
+import time
 import uuid
 import cv2
 from django.core.files.storage import FileSystemStorage
 import numpy as np
 from . import utils
 from . import image_store
+from . import sift
 
 VALID_DETECTIONS = ("lines", "circles", "ellipses")
+SIFT_OPS = ("sift_scale_space", "sift_keypoints", "sift_match_ssd", "sift_match_ncc")
 
 
 def _get_shifted_fft(fs: FileSystemStorage, content_hash: str, image: np.ndarray):
@@ -30,6 +33,14 @@ def _get_shifted_fft(fs: FileSystemStorage, content_hash: str, image: np.ndarray
     np.save(tmp_path, fft_shifted)
     os.replace(tmp_path, cache_path)
     return fft_shifted, False
+
+
+def _fmt_stages(tm: dict) -> str:
+    """'pyramid 0.03s, keypoints 0.05s, descriptors 0.10s' from sift.sift()'s stage timings."""
+    return (
+        f"pyramid {tm['pyramid']:.2f}s, keypoints {tm['detect']:.2f}s, "
+        f"descriptors {tm['descriptors']:.2f}s"
+    )
 
 
 def process_image_upload(request_files, request_post):
@@ -99,6 +110,11 @@ def process_image_upload(request_files, request_post):
     snake_iters = int(float(request_post.get("snake_iters") or 300))
     snake_radius = int(float(request_post.get("snake_radius") or 1))
     snake_sync = request_post.get("snake_sync") in ("on", "true", "1", True)
+    sift_ratio = float(request_post.get("sift_ratio") or 0.8)
+    sift_contrast = float(request_post.get("sift_contrast") or 0.01)
+    sift_edge_ratio = float(request_post.get("sift_edge_ratio") or 10)
+    sift_max_size = int(float(request_post.get("sift_max_size") or 400))
+    sift_draw = int(float(request_post.get("sift_draw") or 60))
 
     if kernel_size < 3:
         kernel_size = 3
@@ -367,6 +383,91 @@ def process_image_upload(request_files, request_post):
             )
 
         
+        elif operation in SIFT_OPS:
+            if not 0 < sift_ratio <= 1:
+                raise ValueError("Ratio test: need 0 < ratio <= 1.")
+            if sift_contrast <= 0:
+                raise ValueError("Contrast threshold must be greater than 0.")
+            if sift_edge_ratio <= 1:
+                raise ValueError("Edge ratio must be greater than 1.")
+            if not 2 * sift.MIN_SIDE <= sift_max_size <= sift.MAX_SIZE_LIMIT:
+                raise ValueError(
+                    f"Max image size: need {2 * sift.MIN_SIDE}-{sift.MAX_SIZE_LIMIT}px "
+                    "(SIFT here is CPU-only, so large images are capped)."
+                )
+            if sift_draw < 1:
+                raise ValueError("Matches to draw: need at least 1.")
+
+            cfg = sift.SiftConfig(contrast_thresh=sift_contrast, edge_ratio=sift_edge_ratio)
+            # SIFT works on grayscale; shrink big images so the keypoint/matching stages stay fast.
+            gray1 = sift.shrink(image_store.load_gray(img1_id, img1), sift_max_size)
+            size_note = f"{gray1.shape[1]}×{gray1.shape[0]}px"
+            settings = f"contrast ≥ {sift_contrast:g}, edge ratio {sift_edge_ratio:g}"
+
+            if operation == "sift_scale_space":
+                sift.check_size(gray1)
+                n_oct = sift.num_octaves_for(gray1)
+                gauss = sift.build_gaussian_pyramid(gray1.astype(np.float32) / 255.0, 1, cfg)
+                dog = sift.build_dog_pyramid(gauss)
+                result_img = sift.scale_space_montage(gauss[0], dog[0], cfg)
+                context["info"] = (
+                    f"Gaussian scale space & Difference of Gaussians — first octave "
+                    f"({cfg.S + 3} Gaussian + {cfg.S + 2} DoG images, S = {cfg.S}, σ0 = {cfg.sigma0:g}); "
+                    f"the full pyramid has {n_oct} octaves for this {size_note} image"
+                )
+
+            elif operation == "sift_keypoints":
+                kps, desc, _, _, tm = sift.sift(gray1, cfg)
+                result_img = sift.draw_keypoints(
+                    gray1, kps, f"{len(kps)} keypoints (circle = scale, line = orientation)"
+                )
+                context["info"] = (
+                    f"SIFT — {len(kps)} keypoints, {desc.shape[1]}-D descriptors, image {size_note}, "
+                    f"{settings} | {sum(tm.values()):.2f}s"
+                    + ("" if len(kps) else " — none found: try a lower contrast threshold")
+                )
+
+            else:  # sift_match_ssd / sift_match_ncc
+                method = "ssd" if operation == "sift_match_ssd" else "ncc"
+                src2 = image_store.resolve(fs, request_files, request_post, "image_2", "image_2_id")
+                if src2 is None:
+                    context["error"] = "Please upload a second image to match against."
+                    return context
+                img2_id, img2_path, img2_url = src2
+                img2 = image_store.load_bgr(img2_id, img2_path)
+                if img2 is None:
+                    context["error"] = "Could not decode the second uploaded image."
+                    return context
+                gray2 = sift.shrink(image_store.load_gray(img2_id, img2), sift_max_size)
+
+                kps1, desc1, _, _, tm1 = sift.sift(gray1, cfg)
+                kps2, desc2, _, _, tm2 = sift.sift(gray2, cfg)
+
+                t0 = time.perf_counter()
+                matches = sift.match(desc1, desc2, method, ratio=sift_ratio)
+                match_time = time.perf_counter() - t0
+
+                result_img, inliers = sift.draw_matches(
+                    gray1, kps1, gray2, kps2, matches, method.upper(), max_draw=sift_draw
+                )
+                context["uploaded_image_2"] = img2_url
+                parts = [
+                    f"{method.upper()} matching — {len(matches)} matches "
+                    f"(ratio test < {sift_ratio:g}) from {len(kps1)} / {len(kps2)} keypoints"
+                ]
+                if inliers is not None:
+                    parts.append(f"RANSAC inliers {inliers}/{len(matches)}")
+                total_time = sum(tm1.values()) + sum(tm2.values()) + match_time
+                parts.append(
+                    f"Time — image 1: {_fmt_stages(tm1)} | image 2: {_fmt_stages(tm2)} | "
+                    f"{method.upper()} matching {match_time:.3f}s | "
+                    f"total {total_time:.2f}s (excl. upload and drawing)"
+                )
+                parts.append(f"images resized to ≤ {sift_max_size}px, {settings}")
+                if not len(kps1) or not len(kps2):
+                    parts.append("an image has no keypoints: try a lower contrast threshold")
+                context["info"] = " | ".join(parts)
+
         elif operation == "threshold":
             result_img = utils.threshold_img(img1_work, threshold=thresh_val)
             context["info"] = f"Applied Manual Global Threshold T = {thresh_val}"

@@ -1,3 +1,4 @@
+import { ChangeDetectorRef } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
@@ -32,6 +33,30 @@ describe('AppComponent', () => {
     const req = httpMock.expectOne('/api/operations/');
     expect(req.request.method).toBe('GET');
     req.flush({ operations: [] });
+    httpMock.verify();
+  });
+
+  it('shows the SIFT operations as their own section of the Operation dropdown', () => {
+    const httpMock = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(AppComponent);
+    fixture.detectChanges();
+    httpMock.expectOne('/api/operations/').flush({
+      operations: [
+        { id: 'sobel', label: 'Sobel Edge Detection', group: 'Edge Detection' },
+        { id: 'sift_keypoints', label: 'SIFT Keypoints (Scale & Orientation)', group: 'Feature Matching (SIFT)' },
+        { id: 'sift_match_ssd', label: 'SIFT Feature Matching (SSD)', group: 'Feature Matching (SIFT)' },
+      ],
+    });
+    // The list arrives in an HTTP callback; mark the view dirty so this also passes without zone.js.
+    fixture.componentRef.injector.get(ChangeDetectorRef).markForCheck();
+    fixture.detectChanges();
+
+    const groups = Array.from(fixture.nativeElement.querySelectorAll('optgroup')) as HTMLOptGroupElement[];
+    expect(groups.map((g) => g.label)).toEqual(['Edge Detection', 'Feature Matching (SIFT)']);
+    expect(Array.from(groups[1].querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)).toEqual([
+      'sift_keypoints',
+      'sift_match_ssd',
+    ]);
     httpMock.verify();
   });
 
@@ -140,6 +165,95 @@ describe('AppComponent', () => {
       expect((req.request.body as FormData).get('image_id')).toBe('b'.repeat(32));
       req.flush({ processed_image: '/media/out.png' });
       await done;
+    });
+
+    describe('SIFT feature matching section', () => {
+      const pickSecond = (name = 'second.png') => {
+        const file = new File([new Uint8Array([4, 5, 6])], name, { type: 'image/png' });
+        app.onSecondarySelected({ target: { files: [file] } } as unknown as Event);
+        return file;
+      };
+      const ID2 = 'b'.repeat(32);
+
+      it('asks for Image 2 only for the matching operations', () => {
+        for (const [op, needs] of [
+          ['sift_match_ssd', true],
+          ['sift_match_ncc', true],
+          ['sift_keypoints', false],
+          ['sift_scale_space', false],
+          ['sobel', false],
+        ] as const) {
+          app.selectedOperation = op;
+          app.onOperationChange();
+          expect(app.showImage2).toBe(needs);
+        }
+        app.selectedOperation = 'sift_match_ssd';
+        expect(app.image2Label).toBe('Image 2 (to match)');
+        app.selectedOperation = 'hybrid';
+        expect(app.image2Label).toBe('Image 2 (hybrid)');
+      });
+
+      it('hides the manual grayscale toggle (SIFT converts on the server)', () => {
+        app.selectedOperation = 'sift_keypoints';
+        expect(app.showGrayToggle).toBe(false);
+      });
+
+      it('does not call the backend when matching without a second image', async () => {
+        pick();
+        httpMock.expectOne('/api/upload/').flush({ image_id: ID, url: '/media/src.png' });
+        app.selectedOperation = 'sift_match_ncc';
+        app.onOperationChange();
+        await app.process();
+        expect(app.error).toContain('second image');
+        httpMock.expectNone('/api/process/');
+      });
+
+      it('sends both image ids and the SIFT settings for matching', async () => {
+        pick();
+        httpMock.expectOne('/api/upload/').flush({ image_id: ID, url: '/media/src.png' });
+        pickSecond();
+        httpMock.expectOne('/api/upload/').flush({ image_id: ID2, url: '/media/second.png' });
+        app.selectedOperation = 'sift_match_ssd';
+        app.onOperationChange();
+        app.params.sift_ratio = 0.7;
+        app.params.sift_draw = 25;
+        const done = app.process();
+        await tick();
+        const req = httpMock.expectOne('/api/process/');
+        const body = req.request.body as FormData;
+        expect(body.get('filter_type')).toBe('sift_match_ssd');
+        expect(body.get('image_id')).toBe(ID);
+        expect(body.get('image_2_id')).toBe(ID2);
+        expect(body.get('sift_ratio')).toBe('0.7');
+        expect(body.get('sift_draw')).toBe('25');
+        expect(body.get('sift_contrast')).toBe('0.01');
+        expect(body.get('sift_max_size')).toBe('400');
+        req.flush({ processed_image: '/media/out.png', info: 'ok' });
+        await done;
+      });
+
+      it('treats SIFT results as figures that cannot be fed back in as the input', async () => {
+        pick();
+        httpMock.expectOne('/api/upload/').flush({ image_id: ID, url: '/media/src.png' });
+        app.selectedOperation = 'sift_keypoints';
+        app.onOperationChange();
+        const done = app.process();
+        await tick();
+        httpMock.expectOne('/api/process/').flush({ processed_image: '/media/out.png' });
+        await done;
+        expect(app.runs[0].isChart).toBe(true);
+        expect(app.canFurther(app.runs[0])).toBe(false);
+
+        // ...while an ordinary operation's result still can be
+        app.selectedOperation = 'sobel';
+        app.onOperationChange();
+        const done2 = app.process();
+        await tick();
+        httpMock.expectOne('/api/process/').flush({ processed_image: '/media/out2.png' });
+        await done2;
+        expect(app.runs[0].isChart).toBe(false);
+        expect(app.canFurther(app.runs[0])).toBe(true);
+      });
     });
   });
 });

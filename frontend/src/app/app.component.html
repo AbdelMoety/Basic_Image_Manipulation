@@ -55,7 +55,7 @@
 
       @if (showImage2) {
         <label class="row">
-          <span class="lbl">Image 2 (hybrid)</span>
+          <span class="lbl">{{ image2Label }}</span>
           <input type="file" accept="image/*" (change)="onSecondarySelected($event)" />
         </label>
       }
@@ -264,6 +264,33 @@
             <input type="number" [(ngModel)]="params.cutoff_high" min="1" max="500" step="1" />
           </label>
         }
+        @if (showSiftThresholds) {
+          <label class="row half">
+            <span class="lbl">Contrast threshold</span>
+            <input type="number" [(ngModel)]="params.sift_contrast" min="0.001" max="0.1" step="0.001" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Edge ratio (r)</span>
+            <input type="number" [(ngModel)]="params.sift_edge_ratio" min="2" max="50" step="1" />
+          </label>
+        }
+        @if (showSift) {
+          <label class="row half">
+            <span class="lbl">Max image size (px)</span>
+            <input type="number" [(ngModel)]="params.sift_max_size" min="64" max="1000" step="50" />
+          </label>
+        }
+        @if (showSiftMatch) {
+          <label class="row half">
+            <span class="lbl">Ratio test (0–1)</span>
+            <input type="number" [(ngModel)]="params.sift_ratio" min="0.1" max="1" step="0.05" />
+          </label>
+          <label class="row half">
+            <span class="lbl">Matches to draw</span>
+            <input type="number" [(ngModel)]="params.sift_draw" min="1" max="500" step="10" />
+          </label>
+          <p class="meta">Image 1 is matched against Image 2. Run SSD in one output and NCC in the other to compare them.</p>
+        }
         @if (showHybridWeights) {
           <label class="row half">
             <span class="lbl">Alpha</span>
@@ -395,7 +422,7 @@
                 [disabled]="!canFurther(v.run)"
                 [title]="
                   v.run?.isChart
-                    ? 'The histogram plot is a chart and cannot be processed further'
+                    ? 'This output is a chart/figure and cannot be processed further'
                     : 'Use this output as the input image for another operation'
                 "
               >

@@ -98,6 +98,26 @@ OPERATIONS = [
         "label": "Create Hybrid Image",
         "group": "Frequency Domain & Hybrid",
     },
+    {
+        "id": "sift_scale_space",
+        "label": "SIFT Scale Space & DoG (First Octave)",
+        "group": "Feature Matching (SIFT)",
+    },
+    {
+        "id": "sift_keypoints",
+        "label": "SIFT Keypoints (Scale & Orientation)",
+        "group": "Feature Matching (SIFT)",
+    },
+    {
+        "id": "sift_match_ssd",
+        "label": "SIFT Feature Matching (SSD)",
+        "group": "Feature Matching (SIFT)",
+    },
+    {
+        "id": "sift_match_ncc",
+        "label": "SIFT Feature Matching (NCC)",
+        "group": "Feature Matching (SIFT)",
+    },
 ]
 
 
