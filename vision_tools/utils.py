@@ -1258,11 +1258,13 @@ def snake_segmentation(image, contour_xy, n_points, alpha, beta, gamma, max_iter
 
 # ==========================================
 # 8. Corner Detection (Harris & Lambda-minus)
-# Ported line-for-line from Manual_Corner_Detection_Harris_LambdaMinus.ipynb
+# Ported from Manual_Corner_Detection_Harris_LambdaMinus.ipynb.
+# Reuses the shared helpers above: ensure_gray_from_bgr, sobel_gradients,
+# convolve_separable (no duplicated filter / Sobel / Gaussian code).
 # ==========================================
 
 def corner_preprocess(img, max_size=400, blur_sigma=1.0):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = ensure_gray_from_bgr(img)
 
     h, w = gray.shape
     scale = max_size / max(h, w)
@@ -1275,43 +1277,20 @@ def corner_preprocess(img, max_size=400, blur_sigma=1.0):
     return gray.astype(np.float64)
 
 
-def filter2d(image, kernel):
-    kh, kw = kernel.shape
-    pad_y, pad_x = kh // 2, kw // 2
-    padded = np.pad(image, ((pad_y, pad_y), (pad_x, pad_x)), mode="reflect")
-
-    H, W = image.shape
-    result = np.zeros((H, W))
-
-    for dy in range(kh):
-        for dx in range(kw):
-            result += kernel[dy, dx] * padded[dy:dy + H, dx:dx + W]
-
-    return result
-
-
-sobel_x = np.array([[-1, 0, 1],
-                    [-2, 0, 2],
-                    [-1, 0, 1]]) / 8.0
-sobel_y = sobel_x.T
-
-
-def gaussian_kernel(sigma):
-    size = 2 * int(np.ceil(3 * sigma)) + 1
-    r = np.arange(size) - size // 2
-    x, y = np.meshgrid(r, r)
-    kernel = np.exp(-(x**2 + y**2) / (2 * sigma**2))
-    return kernel / kernel.sum()                   # weights add up to 1
-
-
 def structure_tensor(gray, window_sigma=1.5):
-    Ix = filter2d(gray, sobel_x)
-    Iy = filter2d(gray, sobel_y)
-    window = gaussian_kernel(window_sigma)
+    # Shared Sobel gradients (section 4). The notebook's kernels were divided by 8, so we do too.
+    Ix, Iy = sobel_gradients(gray)
+    Ix, Iy = Ix / 8.0, Iy / 8.0
 
-    Sxx = filter2d(Ix * Ix, window)
-    Syy = filter2d(Iy * Iy, window)
-    Sxy = filter2d(Ix * Iy, window)
+    # Gaussian weight window as ONE 1-D vector (a 2-D Gaussian is separable)
+    size = 2 * int(np.ceil(3 * window_sigma)) + 1
+    r = np.arange(size) - size // 2
+    window = np.exp(-(r ** 2) / (2 * window_sigma ** 2))
+    window /= window.sum()                          # weights add up to 1
+
+    Sxx = convolve_separable(Ix * Ix, window, window, clip=False)
+    Syy = convolve_separable(Iy * Iy, window, window, clip=False)
+    Sxy = convolve_separable(Ix * Iy, window, window, clip=False)
     return Sxx, Syy, Sxy
 
 

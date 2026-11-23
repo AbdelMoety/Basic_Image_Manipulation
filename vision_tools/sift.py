@@ -379,8 +379,11 @@ def match(d1: np.ndarray, d2: np.ndarray, method: str = "ssd", ratio: float = 0.
 GREEN, RED, WHITE = (0, 255, 0), (0, 0, 255), (255, 255, 255)
 
 
-def _to_bgr(gray: np.ndarray) -> np.ndarray:
-    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+def _to_bgr(img: np.ndarray) -> np.ndarray:
+    """Gray (H, W) -> BGR; a colour image is returned as a BGR copy (alpha dropped)."""
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    return np.ascontiguousarray(img[..., :3]).copy()
 
 
 def _title_band(img_bgr: np.ndarray, text: str) -> np.ndarray:
@@ -391,9 +394,9 @@ def _title_band(img_bgr: np.ndarray, text: str) -> np.ndarray:
     return np.vstack([band, img_bgr])
 
 
-def draw_keypoints(img_gray: np.ndarray, kps, title: str = "") -> np.ndarray:
-    """Circle = scale, line = orientation."""
-    out = _to_bgr(img_gray)
+def draw_keypoints(img: np.ndarray, kps, title: str = "") -> np.ndarray:
+    """Circle = scale, line = orientation. `img` can be gray or a BGR colour image."""
+    out = _to_bgr(img)
     for kp in kps:
         center = (int(kp["x"]), int(kp["y"]))
         radius = max(int(kp["size"] / 2), 2)

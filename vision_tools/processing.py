@@ -44,6 +44,18 @@ def _fmt_stages(tm: dict) -> str:
     )
 
 
+def _color_canvas_like(img_bgr: np.ndarray, gray: np.ndarray) -> np.ndarray:
+    """BGR copy of the original image, resized to the same size as `gray`
+    (so keypoints/corners found on the gray image line up with the colour pixels)."""
+    h, w = gray.shape[:2]
+    if img_bgr.ndim == 2:
+        img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
+    img_bgr = img_bgr[..., :3]
+    if img_bgr.shape[:2] != (h, w):
+        img_bgr = cv2.resize(img_bgr, (w, h), interpolation=cv2.INTER_AREA)
+    return np.ascontiguousarray(img_bgr, dtype=np.uint8).copy()
+
+
 def process_image_upload(request_files, request_post):
     """
     Run the selected CV operation on uploaded image(s).
@@ -425,8 +437,10 @@ def process_image_upload(request_files, request_post):
 
             elif operation == "sift_keypoints":
                 kps, desc, _, _, tm = sift.sift(gray1, cfg)
+                # Detected on gray, drawn on the original colour image (same size as gray1).
+                color1 = _color_canvas_like(img1, gray1)
                 result_img = sift.draw_keypoints(
-                    gray1, kps, f"{len(kps)} keypoints (circle = scale, line = orientation)"
+                    color1, kps, f"{len(kps)} keypoints (circle = scale, line = orientation)"
                 )
                 context["info"] = (
                     f"SIFT — {len(kps)} keypoints, {desc.shape[1]}-D descriptors, image {size_note}, "
@@ -447,6 +461,10 @@ def process_image_upload(request_files, request_post):
                     return context
                 gray2 = sift.shrink(image_store.load_gray(img2_id, img2), sift_max_size)
 
+                # Colour versions (same size as the gray ones) used only for drawing the result.
+                color1 = _color_canvas_like(img1, gray1)
+                color2 = _color_canvas_like(img2, gray2)
+
                 kps1, desc1, _, _, tm1 = sift.sift(gray1, cfg)
                 kps2, desc2, _, _, tm2 = sift.sift(gray2, cfg)
 
@@ -455,7 +473,7 @@ def process_image_upload(request_files, request_post):
                 match_time = time.perf_counter() - t0
 
                 result_img, inliers = sift.draw_matches(
-                    gray1, kps1, gray2, kps2, matches, method.upper(), max_draw=sift_draw
+                    color1, kps1, color2, kps2, matches, method.upper(), max_draw=sift_draw
                 )
                 context["uploaded_image_2"] = img2_url
                 parts = [
@@ -492,13 +510,13 @@ def process_image_upload(request_files, request_post):
             # Computation time = response map + threshold + non-max suppression
             # (excludes upload, grayscale/resize/blur preprocessing and drawing).
             if operation == "harris":
-                color, name = (255, 0, 0), "Harris"
+                color, name = (255, 0, 0), "Harris"          # RGB
                 extra = f"k = {harris_k:g}, "
                 t0 = time.perf_counter()
                 response = utils.harris_response(gray, k=harris_k, window_sigma=corner_sigma)
                 t_resp = time.perf_counter() - t0
             else:
-                color, name = (0, 255, 0), "λ₋"
+                color, name = (0, 255, 0), "λ₋"              # RGB
                 extra = ""
                 t0 = time.perf_counter()
                 response = utils.lambda_minus_response(gray, window_sigma=corner_sigma)
@@ -508,7 +526,13 @@ def process_image_upload(request_files, request_post):
             t_nms = time.perf_counter() - t1
             t_total = t_resp + t_nms
             context["time_ms"] = round(t_total * 1000, 2)
-            result_img = cv2.cvtColor(utils.draw_corners(gray, rows, cols, color), cv2.COLOR_RGB2BGR)
+
+            # Draw the corners on the ORIGINAL COLOUR image (resized like the gray one).
+            result_img = _color_canvas_like(img1, gray)
+            color_bgr = (int(color[2]), int(color[1]), int(color[0]))
+            for r, c in zip(rows, cols):
+                cv2.circle(result_img, (int(c), int(r)), 4, color_bgr, 2)
+
             context["info"] = (
                 f"{name} corners — {len(rows)} found in {t_total * 1000:.1f} ms "
                 f"(response {t_resp * 1000:.1f} ms + NMS {t_nms * 1000:.1f} ms) ({extra}window σ = {corner_sigma:g}, "
