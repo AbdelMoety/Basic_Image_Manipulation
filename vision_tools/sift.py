@@ -88,18 +88,27 @@ def _extremum_mask(below: np.ndarray, mid: np.ndarray, above: np.ndarray) -> np.
     """True where a pixel (border excluded) is >= or <= all 26 neighbours (8 + 9 + 9).
     Same non-strict test as the notebook (`center == cube.max() or center == cube.min()`)."""
     h, w = mid.shape
-    center = mid[1:-1, 1:-1]
-    hi = np.full(center.shape, -np.inf, dtype=mid.dtype)
-    lo = np.full(center.shape, np.inf, dtype=mid.dtype)
-    for layer in (below, mid, above):
-        for dy in range(3):
-            for dx in range(3):
-                if layer is mid and dy == 1 and dx == 1:
-                    continue
-                nb = layer[dy:h - 2 + dy, dx:w - 2 + dx]
-                np.maximum(hi, nb, out=hi)
-                np.minimum(lo, nb, out=lo)
-    return (center >= hi) | (center <= lo)
+    mask = np.zeros((h - 2, w - 2), dtype=bool)
+
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            center = mid[y, x]
+
+            # 3x3x3 cube around (y, x), stacked as (scale, row, col)
+            cube = np.stack([
+                below[y - 1:y + 2, x - 1:x + 2],
+                mid[y - 1:y + 2, x - 1:x + 2],
+                above[y - 1:y + 2, x - 1:x + 2],
+            ])
+
+            # The cube includes the center itself, so center == max/min
+            # means it is >= (or <=) all 26 neighbours.
+            is_max = center == cube.max()
+            is_min = center == cube.min()
+
+            mask[y - 1, x - 1] = is_max or is_min
+
+    return mask
 
 
 def _not_edge(d: np.ndarray, ys: np.ndarray, xs: np.ndarray, edge_ratio: float) -> np.ndarray:
@@ -119,20 +128,29 @@ def detect_keypoints(dog_pyramid, cfg: SiftConfig):
     keypoints = []   # each keypoint: dict(octave, layer, y, x)
     for o, dog_octave in enumerate(dog_pyramid):
         for layer in range(1, cfg.S + 1):              # only layers with a neighbour above and below
-            mid = dog_octave[layer]
-            if min(mid.shape) < 3:
+            below, mid, above = dog_octave[layer - 1], dog_octave[layer], dog_octave[layer + 1]
+            h, w = mid.shape
+            if min(h, w) < 3:
                 continue
-            candidate = np.zeros(mid.shape, dtype=bool)
-            candidate[1:-1, 1:-1] = (
-                _extremum_mask(dog_octave[layer - 1], mid, dog_octave[layer + 1])
-                & (np.abs(mid[1:-1, 1:-1]) > cfg.contrast_thresh)
-            )
-            ys, xs = np.nonzero(candidate)             # row-major, like the notebook's np.where
-            if len(ys) == 0:
-                continue
-            keep = _not_edge(mid, ys, xs, cfg.edge_ratio)
-            for y, x in zip(ys[keep], xs[keep]):
-                keypoints.append(dict(octave=o, layer=layer, y=int(y), x=int(x)))
+
+            # extremum[y - 1, x - 1] refers to pixel (y, x); the border is excluded
+            extremum = _extremum_mask(below, mid, above)
+
+            for y in range(1, h - 1):
+                for x in range(1, w - 1):
+                    # 1. must be a local max/min over the 3x3x3 neighbourhood
+                    if not extremum[y - 1, x - 1]:
+                        continue
+
+                    # 2. must have enough contrast
+                    if abs(mid[y, x]) <= cfg.contrast_thresh:
+                        continue
+
+                    # 3. must not lie on an edge
+                    if not _not_edge(mid, np.array([y]), np.array([x]), cfg.edge_ratio)[0]:
+                        continue
+
+                    keypoints.append(dict(octave=o, layer=layer, y=y, x=x))
     return keypoints
 
 
@@ -160,6 +178,7 @@ def assign_orientations(keypoints, gaussian_pyramid, cfg: SiftConfig):
     """36-bin histogram of gradient directions (weighted by magnitude and a Gaussian window of
     1.5 * sigma). The highest peak gives the orientation; other peaks >= 80 % of it add extra
     keypoints at the same place, as in the original paper."""
+    # gradients are computed once per Gaussian image and cached
     grad_cache = {}
     oriented = []
 
@@ -171,24 +190,31 @@ def assign_orientations(keypoints, gaussian_pyramid, cfg: SiftConfig):
         magnitude, angle = grad_cache[key]
         h, w = magnitude.shape
 
-        weight_sigma = 1.5 * cfg.sigma0 * (cfg.k ** layer)
+        sigma = cfg.sigma0 * (cfg.k ** layer)    # sigma of this layer (in octave pixels)
+        weight_sigma = 1.5 * sigma
         radius = int(round(3 * weight_sigma))
 
-        win = _window(y0, x0, radius, h, w)
-        if win is None:
-            continue
-        sl, dy, dx = win
-        weight = np.exp(-(dx ** 2 + dy ** 2) / (2 * weight_sigma ** 2))
-        bins = (angle[sl] / 360 * NUM_BINS_ORI).astype(np.int64) % NUM_BINS_ORI
-        hist = np.bincount(bins.ravel(), weights=(weight * magnitude[sl]).ravel(),
-                           minlength=NUM_BINS_ORI)
+        # accumulate gradient magnitudes into 36 orientation bins
+        hist = np.zeros(NUM_BINS_ORI)
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                y, x = y0 + dy, x0 + dx
+                # skip pixels without a full gradient neighbourhood (image border)
+                if y < 1 or y >= h - 1 or x < 1 or x >= w - 1:
+                    continue
+                weight = np.exp(-(dx ** 2 + dy ** 2) / (2 * weight_sigma ** 2))
+                bin_idx = int(angle[y, x] / 360 * NUM_BINS_ORI) % NUM_BINS_ORI
+                hist[bin_idx] += weight * magnitude[y, x]
 
-        for _ in range(2):                              # circular smoothing
+        # smooth the histogram a little (circular)
+        for _ in range(2):
             hist = (np.roll(hist, 1) + hist + np.roll(hist, -1)) / 3
 
         max_val = hist.max()
         if max_val == 0:
             continue
+
+        # every local peak with at least 80 % of the maximum becomes an orientation
         for b in range(NUM_BINS_ORI):
             left, right = hist[b - 1], hist[(b + 1) % NUM_BINS_ORI]
             if hist[b] > left and hist[b] > right and hist[b] >= 0.8 * max_val:
@@ -218,27 +244,37 @@ def compute_descriptors(keypoints, gaussian_pyramid, cfg: SiftConfig):
         cell_size = 3 * sigma                           # pixels per cell
         radius = int(cell_size * CELLS / 2 * np.sqrt(2) + 1)
 
-        win = _window(y0, x0, radius, h, w)
-        if win is None:
-            continue
-        sl, dy, dx = win
-
         theta = np.radians(kp["angle"])
         cos_t, sin_t = np.cos(theta), np.sin(theta)
 
-        # rotate the offsets into the keypoint's frame, measured in cells
-        x_rot = (cos_t * dx + sin_t * dy) / cell_size
-        y_rot = (-sin_t * dx + cos_t * dy) / cell_size
-        cx = np.floor(x_rot + CELLS / 2).astype(np.int64)
-        cy = np.floor(y_rot + CELLS / 2).astype(np.int64)
-        inside = (cx >= 0) & (cx < CELLS) & (cy >= 0) & (cy < CELLS)
+        desc = np.zeros(CELLS * CELLS * ORI_BINS)
 
-        rel_angle = (angle[sl] - kp["angle"]) % 360
-        b = (rel_angle / 360 * ORI_BINS).astype(np.int64) % ORI_BINS
-        weight = np.exp(-(x_rot ** 2 + y_rot ** 2) / (2 * (CELLS / 2) ** 2))
-        flat = (cy * CELLS + cx) * ORI_BINS + b
-        desc = np.bincount(flat[inside], weights=(weight * magnitude[sl])[inside],
-                           minlength=CELLS * CELLS * ORI_BINS)
+        # visit every pixel of the square window around the keypoint (row by row)
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                y, x = y0 + dy, x0 + dx
+                # skip pixels without a full gradient neighbourhood (image border)
+                if y < 1 or y >= h - 1 or x < 1 or x >= w - 1:
+                    continue
+
+                # rotate the offset into the keypoint's frame, measured in cells
+                x_rot = (cos_t * dx + sin_t * dy) / cell_size
+                y_rot = (-sin_t * dx + cos_t * dy) / cell_size
+
+                # which of the CELLS x CELLS cells does this pixel fall in?
+                cx = int(np.floor(x_rot + CELLS / 2))
+                cy = int(np.floor(y_rot + CELLS / 2))
+                if cx < 0 or cx >= CELLS or cy < 0 or cy >= CELLS:
+                    continue                            # outside the descriptor grid
+
+                # gradient direction relative to the keypoint angle -> orientation bin
+                rel_angle = (angle[y, x] - kp["angle"]) % 360
+                b = int(rel_angle / 360 * ORI_BINS) % ORI_BINS
+
+                # Gaussian window centred on the keypoint (sigma = half the descriptor width)
+                weight = np.exp(-(x_rot ** 2 + y_rot ** 2) / (2 * (CELLS / 2) ** 2))
+
+                desc[(cy * CELLS + cx) * ORI_BINS + b] += weight * magnitude[y, x]
 
         norm = np.linalg.norm(desc)
         if norm == 0:
@@ -296,7 +332,8 @@ def match(d1: np.ndarray, d2: np.ndarray, method: str = "ssd", ratio: float = 0.
     NCC(a, b) = zero-mean, unit-length dot product -> distance 1 - NCC   (closer to 1 = more similar)
 
     Returns a list of (index in image 1, index in image 2, distance).
-    Done in row blocks so memory stays small however many keypoints there are."""
+    `chunk` is kept only for interface compatibility; it is unused because descriptors are
+    now compared one at a time."""
     if method not in ("ssd", "ncc"):
         raise ValueError(method)
     if len(d1) == 0 or len(d2) < 2:
@@ -304,34 +341,37 @@ def match(d1: np.ndarray, d2: np.ndarray, method: str = "ssd", ratio: float = 0.
 
     a = d1.astype(np.float64)
     b = d2.astype(np.float64)
+
     if method == "ncc":
-        def normalize(d):
-            d = d - d.mean(axis=1, keepdims=True)
-            return d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-12)
-        a, b = normalize(a), normalize(b)
-    else:
-        b_sq = (b ** 2).sum(axis=1)
+        # zero-mean, unit-length descriptors, so NCC is just a dot product
+        for desc in (a, b):
+            for i in range(len(desc)):
+                centered = desc[i] - desc[i].mean()
+                desc[i] = centered / (np.linalg.norm(centered) + 1e-12)
+
+    def distance(u, v):
+        if method == "ssd":
+            return float(np.sqrt(np.sum((u - v) ** 2)))
+        return float(1.0 - np.dot(u, v))
 
     matches = []
-    for start in range(0, len(a), chunk):
-        block = a[start:start + chunk]
-        if method == "ssd":
-            ssd = (block ** 2).sum(axis=1)[:, None] + b_sq[None, :] - 2.0 * (block @ b.T)
-            dist = np.sqrt(np.maximum(ssd, 0.0))
-        else:
-            dist = 1.0 - block @ b.T
+    for i in range(len(a)):
+        # find the closest and second-closest descriptor in image 2
+        best_idx = -1
+        d_best = np.inf
+        d_second = np.inf
+        for j in range(len(b)):
+            d = distance(a[i], b[j])
+            if d < d_best:
+                d_second = d_best
+                d_best = d
+                best_idx = j
+            elif d < d_second:
+                d_second = d
 
-        two = np.argpartition(dist, 1, axis=1)[:, :2]             # indices of the 2 smallest
-        d_two = np.take_along_axis(dist, two, axis=1)
-        order = np.argsort(d_two, axis=1)
-        two = np.take_along_axis(two, order, axis=1)
-        d_two = np.take_along_axis(d_two, order, axis=1)
-        best_idx, d_best, d_second = two[:, 0], d_two[:, 0], d_two[:, 1]
-
-        safe = np.where(d_second > 0, d_second, 1.0)
-        ok = (d_second > 0) & (d_best / safe < ratio)
-        for r in np.nonzero(ok)[0]:
-            matches.append((start + int(r), int(best_idx[r]), float(d_best[r])))
+        # Lowe's ratio test (a zero second distance would make the ratio meaningless)
+        if d_second > 0 and d_best / d_second < ratio:
+            matches.append((i, best_idx, d_best))
     return matches
 
 
